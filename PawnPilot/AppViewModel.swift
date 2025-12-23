@@ -170,6 +170,14 @@ final class AppViewModel: ObservableObject {
 
     func analyze() {
         if isAnalyzing { return }
+        if let gameOver = gameOverMessage(for: boardState) {
+            statusMessage = gameOver
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            return
+        }
         interactionMode = .analyzeLines
         treeToken = UUID()
         isTreeAnalyzing = false
@@ -207,6 +215,14 @@ final class AppViewModel: ObservableObject {
 
     func analyzeMoveTree() {
         if isTreeAnalyzing { return }
+        if let gameOver = gameOverMessage(for: boardState) {
+            statusMessage = gameOver
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            return
+        }
         interactionMode = .analyzeMoveTree
         analysisToken = UUID()
         isAnalyzing = false
@@ -289,6 +305,15 @@ final class AppViewModel: ObservableObject {
 
     func engineMove() {
         if isEngineThinking { return }
+        if let gameOver = gameOverMessage(for: boardState) {
+            statusMessage = gameOver
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            legalDestinations = []
+            return
+        }
         invalidateAnalysis()
         interactionMode = .playAgainstComputer
         engineLines = []
@@ -522,6 +547,16 @@ final class AppViewModel: ObservableObject {
         treeRootState = nil
         treeSelectionSnapshot = nil
         treeRootActiveColor = nil
+    }
+
+    private func gameOverMessage(for state: BoardState) -> String? {
+        guard !moveGenerator.hasAnyLegalMove(in: state) else { return nil }
+        let side = state.activeColor == "w" ? "White" : "Black"
+        if moveValidator.isInCheck(state: state) {
+            return "\(side) to move is checkmated."
+        } else {
+            return "Stalemate - no legal moves."
+        }
     }
 
     private func analysisOptions(multiPV: Int, hash: Int = 128) -> EngineOptions {

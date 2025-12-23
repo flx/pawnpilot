@@ -21,6 +21,12 @@ public struct MoveValidator {
         return true
     }
 
+    public func isInCheck(state: BoardState) -> Bool {
+        let activeIsWhite = state.activeColor == "w"
+        guard let kingPos = kingSquare(isWhite: activeIsWhite, board: state.board) else { return false }
+        return isSquareAttacked(square: kingPos, byWhite: !activeIsWhite, board: state.board)
+    }
+
     private func obeysPieceRules(piece: Piece, move: ChessMove, state: BoardState) -> Bool {
         let board = state.board
         let dx = move.to.file - move.from.file
@@ -284,6 +290,23 @@ public struct LegalMoveGenerator {
             let mv = ChessMove(from: square, to: dest)
             return validator.isLegal(move: mv, in: state) ? dest : nil
         }
+    }
+
+    public func hasAnyLegalMove(in state: BoardState) -> Bool {
+        let activeIsWhite = state.activeColor == "w"
+        for rank in 0..<8 {
+            for file in 0..<8 {
+                let square = BoardSquare(file: file, rank: rank)
+                guard let piece = state.board[file, rank], piece.isWhite == activeIsWhite else { continue }
+                for dest in candidateMoves(for: piece, from: square, board: state.board) {
+                    let mv = ChessMove(from: square, to: dest)
+                    if validator.isLegal(move: mv, in: state) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
     }
 
     private func candidateMoves(for piece: Piece, from: BoardSquare, board: Board) -> [BoardSquare] {
