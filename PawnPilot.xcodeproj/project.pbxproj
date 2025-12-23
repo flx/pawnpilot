@@ -46,6 +46,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Engine/stockfish-macos-m1-apple-silicon",
+				Info.plist,
 			);
 			target = DC24E92A2EFAB3460031137E /* PawnPilot */;
 		};
@@ -142,6 +143,7 @@
 				DC24E9282EFAB3460031137E /* Frameworks */,
 				DC24E9292EFAB3460031137E /* Resources */,
 				DC7A23B52EFADEC500AA2361 /* CopyFiles */,
+				DCF9C0012F0FAA0000000001 /* Sign Stockfish */,
 			);
 			buildRules = (
 			);
@@ -270,6 +272,32 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		DCF9C0012F0FAA0000000001 /* Sign Stockfish */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PROJECT_DIR}/PawnPilot/PawnPilot.entitlements",
+				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon",
+				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Info.plist",
+			);
+			name = "Sign Stockfish";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon",
+				"${DWARF_DSYM_FOLDER_PATH}/stockfish-macos-m1-apple-silicon.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nEXEC=\"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon\"\nif [ ! -x \"$EXEC\" ]; then\n  exit 0\nfi\nif [ \"${CODE_SIGNING_ALLOWED}\" = \"YES\" ]; then\n  ENT_PATH=\"\"\n  if [ -n \"${CODE_SIGN_ENTITLEMENTS:-}\" ]; then\n    ENT_PATH=\"${PROJECT_DIR}/${CODE_SIGN_ENTITLEMENTS}\"\n  fi\n  /usr/bin/codesign --force --options runtime ${ENT_PATH:+--entitlements \"$ENT_PATH\"} --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$EXEC\"\nfi\n/usr/bin/dsymutil \"$EXEC\" -o \"${DWARF_DSYM_FOLDER_PATH}/stockfish-macos-m1-apple-silicon.dSYM\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		DC24E9272EFAB3460031137E /* Sources */ = {
@@ -434,15 +462,19 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = PawnPilot/PawnPilot.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = V37U525228;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PawnPilot/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -467,15 +499,21 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_ENTITLEMENTS = PawnPilot/PawnPilot.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = V37U525228;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = V37U525228;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PawnPilot/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -485,6 +523,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.digitalhandstand.PawnPilot;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
