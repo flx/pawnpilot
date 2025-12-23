@@ -23,15 +23,54 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		DC7A23B52EFADEC500AA2361 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		DC24E92B2EFAB3460031137E /* PawnPilot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PawnPilot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC24E9382EFAB3480031137E /* PawnPilotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PawnPilotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DC24E9422EFAB3480031137E /* PawnPilotUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PawnPilotUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		DC7A23B62EFADECB00AA2361 /* Exceptions for "PawnPilot" folder in "PawnPilot" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Engine/stockfish-macos-m1-apple-silicon",
+			);
+			target = DC24E92A2EFAB3460031137E /* PawnPilot */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		DC7A23B72EFADECB00AA2361 /* Exceptions for "PawnPilot" folder in "Copy Files" phase from "PawnPilot" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			attributesByRelativePath = {
+				"Engine/stockfish-macos-m1-apple-silicon" = (CodeSignOnCopy, );
+			};
+			buildPhase = DC7A23B52EFADEC500AA2361 /* CopyFiles */;
+			membershipExceptions = (
+				"Engine/stockfish-macos-m1-apple-silicon",
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DC24E92D2EFAB3460031137E /* PawnPilot */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DC7A23B62EFADECB00AA2361 /* Exceptions for "PawnPilot" folder in "PawnPilot" target */,
+				DC7A23B72EFADECB00AA2361 /* Exceptions for "PawnPilot" folder in "Copy Files" phase from "PawnPilot" target */,
+			);
 			path = PawnPilot;
 			sourceTree = "<group>";
 		};
@@ -102,6 +141,7 @@
 				DC24E9272EFAB3460031137E /* Sources */,
 				DC24E9282EFAB3460031137E /* Frameworks */,
 				DC24E9292EFAB3460031137E /* Resources */,
+				DC7A23B52EFADEC500AA2361 /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -408,6 +448,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.digitalhandstand.PawnPilot;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -440,6 +481,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.digitalhandstand.PawnPilot;
 				PRODUCT_NAME = "$(TARGET_NAME)";
