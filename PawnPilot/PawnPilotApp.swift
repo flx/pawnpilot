@@ -26,7 +26,7 @@ struct PawnPilotApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
-            CommandGroup(after: .importExport) {
+            CommandGroup(after: .newItem) {
                 Button("Open Image…", action: viewModel.openImageFromPanel)
                     .keyboardShortcut("o", modifiers: [.command])
             }
