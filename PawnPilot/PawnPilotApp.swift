@@ -51,6 +51,7 @@ struct PawnPilotApp: App {
             CommandGroup(replacing: .pasteboard) { }
             CommandGroup(replacing: .textEditing) { }
             CommandGroup(replacing: .textFormatting) { }
+            CommandGroup(replacing: .help) { }
         }
     }
 }
