@@ -177,6 +177,7 @@ final class AppViewModel: ObservableObject {
             self.lastMove = nil
             self.legalDestinations = []
             self.resetHistory()
+            _ = self.updateStatusForGameOver()
         }
     }
 
@@ -358,6 +359,7 @@ final class AppViewModel: ObservableObject {
                 }
                 await self.performAnimatedMove(move: move)
                 self.statusMessage = "Engine played \(uci)."
+                _ = self.updateStatusForGameOver()
             } catch {
                 self.statusMessage = error.localizedDescription
             }
@@ -468,6 +470,7 @@ final class AppViewModel: ObservableObject {
             animatingPiece = nil
         }
         updateUndoRedoState()
+        await MainActor.run { _ = updateStatusForGameOver() }
     }
 
     func undo() {
@@ -563,12 +566,20 @@ final class AppViewModel: ObservableObject {
 
     private func gameOverMessage(for state: BoardState) -> String? {
         guard !moveGenerator.hasAnyLegalMove(in: state) else { return nil }
-        let side = state.activeColor == "w" ? "White" : "Black"
         if moveValidator.isInCheck(state: state) {
-            return "\(side) to move is checkmated."
+            return state.activeColor == "w" ? "White is check mate" : "Black is check mate"
         } else {
-            return "Stalemate - no legal moves."
+            return "Draw through Stalemate"
         }
+    }
+
+    @discardableResult
+    private func updateStatusForGameOver() -> Bool {
+        if let message = gameOverMessage(for: boardState) {
+            statusMessage = message
+            return true
+        }
+        return false
     }
 
     private func analysisOptions(multiPV: Int, hash: Int = 128) -> EngineOptions {
