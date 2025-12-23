@@ -11,6 +11,12 @@ private enum PieceImages {
     static func image(for piece: Piece) -> NSImage? {
         if let cached = cache[piece] { return cached }
         let name = filename(for: piece)
+        if let img = AppBundle.main.image(forResource: NSImage.Name(name)) {
+            cache[piece] = img
+            return img
+        }
+
+        // Legacy fallback: load from bundled files if assets are missing.
         let url = AppBundle.main.url(forResource: name, withExtension: "svg", subdirectory: "ChessPieces")
             ?? AppBundle.main.url(forResource: name, withExtension: "svg")
             ?? AppBundle.main.url(forResource: name, withExtension: "png", subdirectory: "ChessPieces")
