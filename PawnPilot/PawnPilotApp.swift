@@ -10,6 +10,7 @@ import AppKit
 
 @main
 struct PawnPilotApp: App {
+    @StateObject private var viewModel = AppViewModel()
     @Environment(\.scenePhase) var scenePhase
     
     init() {
@@ -21,8 +22,35 @@ struct PawnPilotApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(viewModel: viewModel)
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .importExport) {
+                Button("Open Image…", action: viewModel.openImageFromPanel)
+                    .keyboardShortcut("o", modifiers: [.command])
+            }
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo Move", action: viewModel.undo)
+                    .keyboardShortcut("z", modifiers: [.command])
+                    .disabled(!viewModel.canUndo)
+                Button("Redo Move", action: viewModel.redo)
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(!viewModel.canRedo)
+            }
+            CommandGroup(after: .undoRedo) {
+                Divider()
+                Button("Reset Board", action: viewModel.resetBoard)
+                Button("Rotate Position", action: viewModel.rotatePosition)
+                Button("Flip Board") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        viewModel.orientationWhiteAtBottom.toggle()
+                    }
+                }
+            }
+            CommandGroup(replacing: .pasteboard) { }
+            CommandGroup(replacing: .textEditing) { }
+            CommandGroup(replacing: .textFormatting) { }
+        }
     }
 }

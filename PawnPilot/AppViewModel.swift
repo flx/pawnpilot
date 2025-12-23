@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 //import NextMoveKit
 //import FENDetectorKit
 
@@ -136,6 +137,17 @@ final class AppViewModel: ObservableObject {
             return
         }
         detect(cgImage: cgImage)
+    }
+
+    func openImageFromPanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "Choose a chessboard image"
+        if panel.runModal() == .OK, let url = panel.url {
+            loadImage(from: url)
+        }
     }
 
     func detect(cgImage: CGImage) {

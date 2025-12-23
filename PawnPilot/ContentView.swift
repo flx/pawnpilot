@@ -37,10 +37,10 @@ private enum PieceImages {
 }
 
 struct ContentView: View {
-    @StateObject private var viewModel = AppViewModel()
+    @ObservedObject var viewModel: AppViewModel
     @State private var selectedSquare: BoardSquare?
     @State private var dropHighlight = false
-    @State private var nextMoveSelection = "w"
+    @State private var nextMoveSelection: String
     private let boardColumnWidth: CGFloat = 492
     private var displayedEngineLines: [EngineLine] {
         viewModel.interactionMode == .analyzeLines ? viewModel.engineLines : []
@@ -65,6 +65,11 @@ struct ContentView: View {
             return []
         }
         return selected.choicePath
+    }
+
+    init(viewModel: AppViewModel) {
+        _viewModel = ObservedObject(wrappedValue: viewModel)
+        _nextMoveSelection = State(initialValue: viewModel.boardState.activeColor)
     }
 
     private func treeLineColor(_ index: Int) -> Color {
@@ -225,7 +230,7 @@ struct ContentView: View {
         GroupBox("Board") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Button("Open Image…", action: openImage)
+                    Button("Open Image…", action: viewModel.openImageFromPanel)
                     Button("Reset Board", action: viewModel.resetBoard)
                 }
                 HStack {
@@ -515,17 +520,6 @@ struct ContentView: View {
         }
         .padding(.top, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func openImage() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.title = "Choose a chessboard image"
-        if panel.runModal() == .OK, let url = panel.url {
-            viewModel.loadImage(from: url)
-        }
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
