@@ -290,7 +290,6 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon",
 				"${DWARF_DSYM_FOLDER_PATH}/stockfish-macos-m1-apple-silicon.dSYM",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
