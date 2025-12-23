@@ -43,7 +43,7 @@ This plan is structured so the app can be re-implemented from scratch with equiv
 - Targets: NextMoveApp (SwiftUI), NextMoveKit (logic), vendored FENDetectorKit.
 - Resources:
   - Engine: `Resources/Engine/arm64/stockfish` (and variants) bundled; locate executable recursively.
-  - Pieces: SVG/PNG assets under `Resources/ChessPieces`.
+- Pieces: SVG assets in `Assets.xcassets` (one imageset per piece, vector preserved).
 - Platform: macOS 14+, Apple Silicon only. Offline; no networking.
 - Engine timeouts: optional; default is no timeout (nil).
 
@@ -143,7 +143,7 @@ This plan is structured so the app can be re-implemented from scratch with equiv
 
 ## 10) Rebuild Steps (High-Level)
 1. Set up Swift package with targets NextMoveApp and NextMoveKit; include FENDetectorKit vendor.
-2. Add resources: Stockfish arm64 binary under Engine/arm64; chess piece assets under Resources/ChessPieces; ensure bundle lookup enumerates recursively.
+2. Add resources: Stockfish arm64 binary under Engine/arm64; chess piece assets live in the asset catalog; ensure bundle lookup enumerates recursively for the engine binary only.
 3. Implement models (EngineScore/Line/Options, TreeMoveNode, BoardState, MoveValidator, LegalMoveGenerator, EngineMoveSelector).
 4. Implement StockfishEngine (single-shot) and PersistentStockfishEngine (persistent) with optional timeout (nil default).
 5. Implement AppViewModel per behaviors above, including mode handling, retries for tree, score perspective, and incremental animation.
