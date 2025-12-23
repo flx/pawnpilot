@@ -282,7 +282,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"${PROJECT_DIR}/PawnPilot/PawnPilot.entitlements",
+				"${PROJECT_DIR}/PawnPilot/Stockfish.entitlements",
 				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon",
 				"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Info.plist",
 			);
@@ -294,7 +294,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nEXEC=\"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon\"\nif [ ! -x \"$EXEC\" ]; then\n  exit 0\nfi\nif [ \"${CODE_SIGNING_ALLOWED}\" = \"YES\" ]; then\n  ENT_PATH=\"\"\n  if [ -n \"${CODE_SIGN_ENTITLEMENTS:-}\" ]; then\n    ENT_PATH=\"${PROJECT_DIR}/${CODE_SIGN_ENTITLEMENTS}\"\n  fi\n  /usr/bin/codesign --force --options runtime ${ENT_PATH:+--entitlements \"$ENT_PATH\"} --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$EXEC\"\nfi\n/usr/bin/dsymutil \"$EXEC\" -o \"${DWARF_DSYM_FOLDER_PATH}/stockfish-macos-m1-apple-silicon.dSYM\"\n";
+			shellScript = "set -euo pipefail\nEXEC=\"${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/stockfish-macos-m1-apple-silicon\"\nSTOCKFISH_ENT=\"${PROJECT_DIR}/PawnPilot/Stockfish.entitlements\"\nif [ ! -x \"$EXEC\" ]; then\n  exit 0\nfi\nif [ \"${CODE_SIGNING_ALLOWED}\" = \"YES\" ]; then\n  /usr/bin/codesign --force --options runtime --entitlements \"$STOCKFISH_ENT\" --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$EXEC\"\nfi\n/usr/bin/dsymutil \"$EXEC\" -o \"${DWARF_DSYM_FOLDER_PATH}/stockfish-macos-m1-apple-silicon.dSYM\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
