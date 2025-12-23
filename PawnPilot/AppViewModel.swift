@@ -564,6 +564,10 @@ final class AppViewModel: ObservableObject {
         treeRootActiveColor = nil
     }
 
+    var gameOverScoreText: String? {
+        gameOverMessage(for: boardState)
+    }
+
     private func gameOverMessage(for state: BoardState) -> String? {
         guard !moveGenerator.hasAnyLegalMove(in: state) else { return nil }
         if moveValidator.isInCheck(state: state) {

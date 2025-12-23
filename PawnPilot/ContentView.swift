@@ -56,6 +56,9 @@ struct ContentView: View {
         guard viewModel.interactionMode == .analyzeMoveTree else { return nil }
         return treeScoreDisplay(nodes: viewModel.treeNodes, selectedID: viewModel.selectedTreeNodeID)
     }
+    private var scoreOverrideText: String? {
+        viewModel.gameOverScoreText ?? treeScoreText
+    }
     private var currentTreeBasePath: [Int] {
         guard
             viewModel.interactionMode == .analyzeMoveTree,
@@ -146,7 +149,7 @@ struct ContentView: View {
                     lines: displayedEngineLines,
                     bottomColor: viewModel.orientationWhiteAtBottom ? "w" : "b",
                     perspectiveColor: viewModel.boardState.activeColor,
-                    overrideScore: treeScoreText
+                    overrideScore: scoreOverrideText
                 )
         }
     }
