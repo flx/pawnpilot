@@ -252,15 +252,13 @@ struct ContentView: View {
                     Spacer()
                     Toggle("Flip Board", isOn: flipBoardBinding.animation(.easeInOut(duration: 0.15)))
                         .toggleStyle(.switch)
-                }
-                HStack(spacing: 12) {
-                    nextMoveControl
-                    Spacer()
                     Toggle("Show Threat Map", isOn: $viewModel.showThreatOverlay)
                         .toggleStyle(.switch)
                 }
                 HStack {
+                    nextMoveControl
                     Spacer()
+                    Button("Reset Board", action: viewModel.resetBoard)
                     Button("Undo Move", action: viewModel.undo)
                         .disabled(!viewModel.canUndo)
                     Button("Redo Move", action: viewModel.redo)
