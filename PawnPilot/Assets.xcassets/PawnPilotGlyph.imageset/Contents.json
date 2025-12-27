@@ -1,12 +1,12 @@
 {
   "images" : [
     {
-      "filename" : "PawnPilotGlyph.png",
+      "filename" : "PawnPilot-512.png",
       "idiom" : "mac",
       "scale" : "1x"
     },
     {
-      "filename" : "PawnPilotGlyph.png",
+      "filename" : "PawnPilot-1024.png",
       "idiom" : "mac",
       "scale" : "2x"
     }

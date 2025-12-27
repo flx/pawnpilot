@@ -36,6 +36,27 @@ private enum PieceImages {
     }
 }
 
+private func treeBaseColor(_ index: Int) -> Color {
+    let palette: [Color] = [
+        Color.green,
+        Color.blue,
+        Color.orange,
+        Color.purple,
+        Color.red,
+        Color.cyan,
+        Color.mint,
+        Color.pink,
+        Color.yellow,
+        Color.indigo,
+        Color.brown
+    ]
+    if index < palette.count {
+        return palette[index]
+    }
+    let hue = Double(index % 12) / 12.0
+    return Color(hue: hue, saturation: 0.65, brightness: 0.8)
+}
+
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
     @State private var selectedSquare: BoardSquare?
@@ -76,17 +97,7 @@ struct ContentView: View {
     }
 
     private func treeLineColor(_ index: Int) -> Color {
-        switch index {
-        case 0: return Color.green.opacity(0.65)
-        case 1: return Color.blue.opacity(0.65)
-        case 2: return Color.orange.opacity(0.65)
-        case 3: return Color.purple.opacity(0.65)
-        case 4: return Color.red.opacity(0.65)
-        case 5: return Color.cyan.opacity(0.65)
-        default:
-            let hue = Double(index % 12) / 12.0
-            return Color(hue: hue, saturation: 0.65, brightness: 0.8, opacity: 0.65)
-        }
+        treeBaseColor(index).opacity(0.65)
     }
     private var flipBoardBinding: Binding<Bool> {
         Binding(
@@ -314,7 +325,7 @@ struct ContentView: View {
         labeledSlider(title: "Alternatives/move", value: Binding(
             get: { Double(viewModel.treeBranchCount) },
             set: { viewModel.treeBranchCount = Int($0.rounded()) }
-        ), range: 1...6, display: "\(viewModel.treeBranchCount)")
+        ), range: 1...10, display: "\(viewModel.treeBranchCount)")
     }
 
     private var arrowCountControl: some View {
@@ -372,8 +383,9 @@ struct ContentView: View {
         let baseDepth = basePath.count
         let children = nodes.filter { pathHasPrefix($0.choicePath, basePath) && $0.choicePath.count == baseDepth + 1 }
 
-        return children.enumerated().map { index, child in
-            TreeArrowPath(nodes: [child], lineIndex: index)
+        return children.compactMap { child in
+            guard let branchIndex = child.choicePath.last else { return nil }
+            return TreeArrowPath(nodes: [child], lineIndex: branchIndex)
         }
     }
 
@@ -583,7 +595,7 @@ struct EngineLinesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(lines.enumerated()), id: \.element.id) { _, line in
+            ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(scoreText(line.score))
                     Text(line.moves.joined(separator: " "))
@@ -594,11 +606,11 @@ struct EngineLinesView: View {
                 .padding(8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(backgroundColor(for: line, isSelected: line.id == selectedID))
+                        .fill(backgroundColor(for: treeBaseColor(index), isSelected: line.id == selectedID))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(isSelectedBorder(line: line, selectedID: selectedID), lineWidth: 2)
+                        .strokeBorder(selectionBorder(lineColor: treeBaseColor(index), isSelected: line.id == selectedID), lineWidth: 2)
                 )
                 .onTapGesture {
                     if selectedID == line.id {
@@ -641,34 +653,13 @@ struct EngineLinesView: View {
         }
     }
 
-    private func isSelectedBorder(line: EngineLine, selectedID: EngineLine.ID?) -> Color {
-        line.id == selectedID ? Color.black.opacity(0.6) : Color.clear
+    private func selectionBorder(lineColor: Color, isSelected: Bool) -> Color {
+        isSelected ? lineColor.opacity(0.8) : Color.clear
     }
 
-    private func evalValue(_ score: EngineScore) -> Double {
-        switch score {
-        case .cp(let v): return Double(v) / 100.0
-        case .mate(let m):
-            // Positive for mating the opponent, negative if being mated soon.
-            return m > 0 ? 999 : -999
-        }
-    }
-
-    private func backgroundColor(for line: EngineLine, isSelected: Bool) -> Color {
-        let val = evalValue(line.score)
-        let clamped = max(-5.0, min(5.0, val))
-        let scale = CGFloat(abs(clamped) / 5.0) // 0...1
-        let saturation = 0.35 + 0.45 * scale
-        let brightness = 0.95 - 0.25 * scale
-        let baseOpacity: Double = isSelected ? 0.9 : 0.8
-
-        if val >= 0 {
-            // Green hue ~120°
-            return Color(hue: 0.33, saturation: saturation, brightness: brightness, opacity: baseOpacity)
-        } else {
-            // Red hue ~0°
-            return Color(hue: 0.0, saturation: saturation, brightness: brightness, opacity: baseOpacity)
-        }
+    private func backgroundColor(for lineColor: Color, isSelected: Bool) -> Color {
+        let baseOpacity: Double = isSelected ? 0.28 : 0.16
+        return lineColor.opacity(baseOpacity)
     }
 }
 
@@ -1044,24 +1035,7 @@ struct ArrowsOverlay: View {
     }
 
     private func color(for index: Int) -> Color {
-        let palette: [Color] = [
-            Color.green,
-            Color.blue,
-            Color.orange,
-            Color.purple,
-            Color.cyan,
-            Color.mint,
-            Color.pink,
-            Color.yellow,
-            Color.indigo,
-            Color.brown
-        ].map { $0.opacity(0.8) }
-        if index < palette.count {
-            return palette[index]
-        }
-        // Fallback: cycle hues if more than palette size.
-        let hue = Double((index % 12)) / 12.0
-        return Color(hue: hue, saturation: 0.7, brightness: 0.8, opacity: 0.8)
+        treeBaseColor(index).opacity(0.8)
     }
 }
 
@@ -1073,7 +1047,12 @@ struct TreeArrowPath: Identifiable {
 
     init(nodes: [TreeMoveNode], lineIndex: Int) {
         self.moves = nodes.map { $0.uci }
-        self.labels = nodes.map { String($0.label.suffix(1)) }
+        self.labels = nodes.map { node in
+            if let last = node.choicePath.last {
+                return String(last + 1)
+            }
+            return node.label
+        }
         self.lineIndex = lineIndex
     }
 }
@@ -1215,23 +1194,7 @@ struct TreeArrowsOverlay: View {
     }
 
     private func color(for index: Int) -> Color {
-        let palette: [Color] = [
-            Color.green,
-            Color.blue,
-            Color.orange,
-            Color.purple,
-            Color.cyan,
-            Color.mint,
-            Color.pink,
-            Color.yellow,
-            Color.indigo,
-            Color.brown
-        ].map { $0.opacity(0.8) }
-        if index < palette.count {
-            return palette[index]
-        }
-        let hue = Double((index % 12)) / 12.0
-        return Color(hue: hue, saturation: 0.7, brightness: 0.8, opacity: 0.8)
+        treeBaseColor(index).opacity(0.8)
     }
 }
 
