@@ -57,7 +57,9 @@ struct TreeMoveNode: Identifiable {
 
 @MainActor
 final class AppViewModel: ObservableObject {
-    @Published var boardState = BoardState()
+    @Published var boardState = BoardState() {
+        didSet { recomputeThreatMap() }
+    }
     @Published var detectionStatus: DetectionStatus = .idle
     @Published var engineLines: [EngineLine] = []
     @Published var statusMessage: String?
@@ -82,6 +84,9 @@ final class AppViewModel: ObservableObject {
     @Published var isTreeAnalyzing = false
     @Published var canUndo = false
     @Published var canRedo = false
+    @Published var showThreatOverlay = false
+    @Published var threatMapWhite: [BoardSquare: Int] = [:]
+    @Published var threatMapBlack: [BoardSquare: Int] = [:]
 
     private let pipeline = DetectorPipeline()
     private let engine: StockfishEngine
@@ -110,6 +115,7 @@ final class AppViewModel: ObservableObject {
         if engineURL == nil {
             Self.reportMissingEngine(in: bundle)
         }
+        recomputeThreatMap()
     }
 
     func loadImage(from url: URL) {
@@ -584,6 +590,103 @@ final class AppViewModel: ObservableObject {
             return true
         }
         return false
+    }
+
+    private func recomputeThreatMap() {
+        let (white, black) = threatCounts(for: boardState)
+        threatMapWhite = white
+        threatMapBlack = black
+    }
+
+    private func threatCounts(for state: BoardState) -> (white: [BoardSquare: Int], black: [BoardSquare: Int]) {
+        var white: [BoardSquare: Int] = [:]
+        var black: [BoardSquare: Int] = [:]
+
+        for rank in 0..<8 {
+            for file in 0..<8 {
+                let square = BoardSquare(file: file, rank: rank)
+                guard let piece = state.board[file, rank] else { continue }
+                let attacks = attackedSquares(for: piece, at: square, board: state.board)
+                if piece.isWhite {
+                    for target in attacks {
+                        white[target, default: 0] += 1
+                    }
+                } else {
+                    for target in attacks {
+                        black[target, default: 0] += 1
+                    }
+                }
+            }
+        }
+        return (white, black)
+    }
+
+    private func attackedSquares(for piece: Piece, at square: BoardSquare, board: Board) -> [BoardSquare] {
+        func inBounds(_ file: Int, _ rank: Int) -> Bool {
+            (0..<8).contains(file) && (0..<8).contains(rank)
+        }
+
+        var results: [BoardSquare] = []
+        let f = square.file
+        let r = square.rank
+
+        switch piece {
+        case .whitePawn:
+            let targets = [(f - 1, r + 1), (f + 1, r + 1)]
+            for (tf, tr) in targets where inBounds(tf, tr) {
+                results.append(BoardSquare(file: tf, rank: tr))
+            }
+        case .blackPawn:
+            let targets = [(f - 1, r - 1), (f + 1, r - 1)]
+            for (tf, tr) in targets where inBounds(tf, tr) {
+                results.append(BoardSquare(file: tf, rank: tr))
+            }
+        case .whiteKnight, .blackKnight:
+            let offsets = [(1,2),(2,1),(-1,2),(-2,1),(1,-2),(2,-1),(-1,-2),(-2,-1)]
+            for (dx, dy) in offsets {
+                let tf = f + dx
+                let tr = r + dy
+                if inBounds(tf, tr) {
+                    results.append(BoardSquare(file: tf, rank: tr))
+                }
+            }
+        case .whiteBishop, .blackBishop:
+            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,1), (-1,1), (1,-1), (-1,-1)], board: board))
+        case .whiteRook, .blackRook:
+            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,0), (-1,0), (0,1), (0,-1)], board: board))
+        case .whiteQueen, .blackQueen:
+            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,0), (-1,0), (0,1), (0,-1), (1,1), (-1,1), (1,-1), (-1,-1)], board: board))
+        case .whiteKing, .blackKing:
+            for dx in -1...1 {
+                for dy in -1...1 where !(dx == 0 && dy == 0) {
+                    let tf = f + dx
+                    let tr = r + dy
+                    if inBounds(tf, tr) {
+                        results.append(BoardSquare(file: tf, rank: tr))
+                    }
+                }
+            }
+        }
+
+        return results
+    }
+
+    private func slidingAttacks(from square: BoardSquare, directions: [(Int, Int)], board: Board) -> [BoardSquare] {
+        var results: [BoardSquare] = []
+        for (dx, dy) in directions {
+            var file = square.file + dx
+            var rank = square.rank + dy
+            while (0..<8).contains(file) && (0..<8).contains(rank) {
+                let target = BoardSquare(file: file, rank: rank)
+                results.append(target)
+                if board[file, rank] != nil {
+                    break
+                }
+                file += dx
+                rank += dy
+            }
+        }
+        return results
     }
 
     private func analysisOptions(multiPV: Int, hash: Int = 128) -> EngineOptions {

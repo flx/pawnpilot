@@ -144,7 +144,10 @@ struct ContentView: View {
                     treeMaxPlies: treeMaxPlies,
                     maxSegments: viewModel.maxArrowsPerLine,
                     dropHighlight: dropHighlight,
-                    animatingPiece: viewModel.animatingPiece
+                    animatingPiece: viewModel.animatingPiece,
+                    showThreatOverlay: viewModel.showThreatOverlay,
+                    threatMapWhite: viewModel.threatMapWhite,
+                    threatMapBlack: viewModel.threatMapBlack
                 ) { from, to in
                     viewModel.applyUserMove(from: from, to: to)
                     selectedSquare = nil
@@ -243,18 +246,21 @@ struct ContentView: View {
     private var boardBox: some View {
         GroupBox("Board") {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 8) {
                     Button("Open Image…", action: viewModel.openImageFromPanel)
-                    Button("Reset Board", action: viewModel.resetBoard)
-                }
-                HStack {
                     Button("Rotate Position", action: viewModel.rotatePosition)
+                    Spacer()
                     Toggle("Flip Board", isOn: flipBoardBinding.animation(.easeInOut(duration: 0.15)))
                         .toggleStyle(.switch)
                 }
-                HStack {
+                HStack(spacing: 12) {
                     nextMoveControl
-                    Spacer(minLength: 12)
+                    Spacer()
+                    Toggle("Show Threat Map", isOn: $viewModel.showThreatOverlay)
+                        .toggleStyle(.switch)
+                }
+                HStack {
+                    Spacer()
                     Button("Undo Move", action: viewModel.undo)
                         .disabled(!viewModel.canUndo)
                     Button("Redo Move", action: viewModel.redo)
@@ -776,6 +782,9 @@ struct BoardGridView: View {
     @Binding var selected: BoardSquare?
     let lastMove: ChessMove?
     let legalTargets: [BoardSquare]
+    let showThreatOverlay: Bool
+    let threatMapWhite: [BoardSquare: Int]
+    let threatMapBlack: [BoardSquare: Int]
     let animatingPiece: AnimatedPiece?
     let onMove: (BoardSquare, BoardSquare) -> Void
 
@@ -815,11 +824,16 @@ struct BoardGridView: View {
         let darkColor = Color(.sRGB, red: 0.90, green: 0.90, blue: 0.90, opacity: 1.0)  // light gray
         let isLegalTarget = legalTargets.contains(square)
         let isHiddenByAnimation = animatingPiece?.from == square || animatingPiece?.to == square
+        let whiteThreats = threatMapWhite[square] ?? 0
+        let blackThreats = threatMapBlack[square] ?? 0
 
         return Rectangle()
             .fill(isLight ? lightColor : darkColor)
             .overlay(
                 ZStack {
+                    if showThreatOverlay {
+                        threatOverlays(white: whiteThreats, black: blackThreats)
+                    }
                     if isSelected {
                         Color.accentColor.opacity(0.25)
                     }
@@ -875,6 +889,50 @@ struct BoardGridView: View {
         case .blackRook: return "r"
         case .blackQueen: return "q"
         case .blackKing: return "k"
+        }
+    }
+
+    @ViewBuilder
+    private func threatOverlays(white: Int, black: Int) -> some View {
+        let baseCorner: CGFloat = 2
+        let baseInset: CGFloat = 0
+        if white > 0 && black > 0 {
+            let whiteWidth = threatLineWidth(white)
+            let blackWidth = threatLineWidth(black)
+            RoundedRectangle(cornerRadius: baseCorner)
+                .inset(by: baseInset)
+                .strokeBorder(Color.red.opacity(threatOpacity(white)), lineWidth: whiteWidth)
+            RoundedRectangle(cornerRadius: max(1, baseCorner - 0))
+                .inset(by: baseInset + whiteWidth)
+                .strokeBorder(Color.blue.opacity(threatOpacity(black)), lineWidth: blackWidth)
+        } else if white > 0 {
+            RoundedRectangle(cornerRadius: baseCorner)
+                .inset(by: baseInset)
+                .strokeBorder(Color.red.opacity(threatOpacity(white)), lineWidth: threatLineWidth(white))
+        } else if black > 0 {
+            RoundedRectangle(cornerRadius: baseCorner)
+                .inset(by: baseInset)
+                .strokeBorder(Color.blue.opacity(threatOpacity(black)), lineWidth: threatLineWidth(black))
+        }
+    }
+
+    private func threatLineWidth(_ count: Int) -> CGFloat {
+        switch count {
+        case 0: return 0
+        case 1: return 3.0
+        case 2: return 4.0
+        case 3: return 5.0
+        default: return 6.0
+        }
+    }
+
+    private func threatOpacity(_ count: Int) -> Double {
+        switch count {
+        case 0: return 0
+        case 1: return 0.45
+        case 2: return 0.55
+        case 3: return 0.65
+        default: return 0.75
         }
     }
 }
@@ -1462,6 +1520,9 @@ struct BoardWithCoords: View {
     let maxSegments: Int
     let dropHighlight: Bool
     let animatingPiece: AnimatedPiece?
+    let showThreatOverlay: Bool
+    let threatMapWhite: [BoardSquare: Int]
+    let threatMapBlack: [BoardSquare: Int]
     let onMove: (BoardSquare, BoardSquare) -> Void
 
     private var fileLabels: [String] {
@@ -1502,6 +1563,9 @@ struct BoardWithCoords: View {
                         selected: $selected,
                         lastMove: lastMove,
                         legalTargets: legalTargets,
+                        showThreatOverlay: showThreatOverlay,
+                        threatMapWhite: threatMapWhite,
+                        threatMapBlack: threatMapBlack,
                         animatingPiece: animatingPiece,
                         onMove: onMove
                     )
