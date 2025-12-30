@@ -59,9 +59,15 @@ private func treeBaseColor(_ index: Int) -> Color {
 
 struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
+    private enum RightPanelTab: Hashable {
+        case analyzeVariations
+        case analyzeBestLines
+        case playBot
+    }
     @State private var selectedSquare: BoardSquare?
     @State private var dropHighlight = false
     @State private var nextMoveSelection: String
+    @State private var selectedTab: RightPanelTab
     private let boardColumnWidth: CGFloat = 492
     private var displayedEngineLines: [EngineLine] {
         viewModel.interactionMode == .analyzeLines ? viewModel.engineLines : []
@@ -94,6 +100,29 @@ struct ContentView: View {
     init(viewModel: AppViewModel) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
         _nextMoveSelection = State(initialValue: viewModel.boardState.activeColor)
+        _selectedTab = State(initialValue: Self.tab(for: viewModel.interactionMode))
+    }
+
+    private static func tab(for mode: InteractionMode) -> RightPanelTab {
+        switch mode {
+        case .analyzeMoveTree:
+            return .analyzeVariations
+        case .analyzeLines:
+            return .analyzeBestLines
+        case .playAgainstComputer:
+            return .playBot
+        }
+    }
+
+    private static func mode(for tab: RightPanelTab) -> InteractionMode {
+        switch tab {
+        case .analyzeVariations:
+            return .analyzeMoveTree
+        case .analyzeBestLines:
+            return .analyzeLines
+        case .playBot:
+            return .playAgainstComputer
+        }
     }
 
     private func treeLineColor(_ index: Int) -> Color {
@@ -170,13 +199,79 @@ struct ContentView: View {
 
     private var rightPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            engineParametersBox
-            playAgainstComputerBox
-            analyzeMoveTreeBox
-            analyzeLinesBox
-            boardBox
+            modeSwitcher
+            rightPanelContent
         }
         .frame(minWidth: 320, alignment: .topLeading)
+        .onChange(of: selectedTab) { newValue in
+            let mode = Self.mode(for: newValue)
+            if viewModel.interactionMode != mode {
+                viewModel.interactionMode = mode
+            }
+        }
+        .onChange(of: viewModel.interactionMode) { newValue in
+            let tab = Self.tab(for: newValue)
+            if tab != selectedTab {
+                selectedTab = tab
+            }
+        }
+    }
+
+    private var modeSwitcher: some View {
+        HStack {
+            Spacer()
+            Picker("Mode", selection: $selectedTab) {
+                Text("Analyze Variations").tag(RightPanelTab.analyzeVariations)
+                Text("Analyze Best Lines").tag(RightPanelTab.analyzeBestLines)
+                Text("Play Bot").tag(RightPanelTab.playBot)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Spacer()
+        }
+        .padding(.top, BoardWithCoords.boardTopInset)
+    }
+
+    @ViewBuilder
+    private var rightPanelContent: some View {
+        switch selectedTab {
+        case .analyzeVariations:
+            analyzeVariationsPanel
+        case .analyzeBestLines:
+            analyzeBestLinesPanel
+        case .playBot:
+            playBotPanel
+        }
+    }
+
+    private var analyzeVariationsPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            boardBox
+            engineParametersBox
+            analysisVariationsBox
+            analyzeVariationsAction
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var analyzeBestLinesPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            boardBox
+            engineParametersBox
+            analysisLinesBox
+            analyzeLinesAction
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var playBotPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            boardBox
+            engineParametersBox
+            botParametersBox
+            botMoveAction
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var engineParametersBox: some View {
@@ -187,60 +282,72 @@ struct ContentView: View {
         }
     }
 
-    private var playAgainstComputerBox: some View {
-        GroupBox("Play Against Bot") {
-            VStack(alignment: .leading, spacing: 8) {
-                strengthControl
-                randomnessControl
-                HStack(spacing: 6) {
-                    Button("Bot Move", action: viewModel.engineMove)
-                        .disabled(viewModel.isEngineThinking)
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 16, height: 16)
-                        .opacity(viewModel.isEngineThinking ? 1 : 0)
-                    Toggle("Keep playing", isOn: $viewModel.keepPlaying)
-                        .toggleStyle(.switch)
-                        .disabled(viewModel.interactionMode != .playAgainstComputer)
-                }
-            }
-        }
-        .groupBoxStyle(ModeGroupBoxStyle(isActive: viewModel.interactionMode == .playAgainstComputer))
-    }
-
-    private var analyzeMoveTreeBox: some View {
-        GroupBox("Analyze Variations") {
+    private var analysisVariationsBox: some View {
+        GroupBox("Analysis Parameters") {
             VStack(alignment: .leading, spacing: 8) {
                 treeBranchControl
-                HStack(spacing: 6) {
-                    Button("Analyze", action: viewModel.analyzeMoveTree)
-                        .disabled(viewModel.isTreeAnalyzing)
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 16, height: 16)
-                        .opacity(viewModel.isTreeAnalyzing ? 1 : 0)
-                }
             }
         }
-        .groupBoxStyle(ModeGroupBoxStyle(isActive: viewModel.interactionMode == .analyzeMoveTree))
     }
 
-    private var analyzeLinesBox: some View {
-        GroupBox("Analyze Best Lines") {
+    private var analysisLinesBox: some View {
+        GroupBox("Analysis Parameters") {
             VStack(alignment: .leading, spacing: 8) {
                 linesControl
                 arrowCountControl
-                HStack(spacing: 6) {
-                    Button("Analyze", action: viewModel.analyze)
-                        .disabled(viewModel.isAnalyzing)
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 16, height: 16)
-                        .opacity(viewModel.isAnalyzing ? 1 : 0)
-                }
             }
         }
-        .groupBoxStyle(ModeGroupBoxStyle(isActive: viewModel.interactionMode == .analyzeLines))
+    }
+
+    private var botParametersBox: some View {
+        GroupBox("Bot Parameters") {
+            VStack(alignment: .leading, spacing: 8) {
+                strengthControl
+                randomnessControl
+                Toggle("Keep playing", isOn: $viewModel.keepPlaying)
+                    .toggleStyle(.switch)
+                    .disabled(viewModel.interactionMode != .playAgainstComputer)
+            }
+        }
+    }
+
+    private var analyzeVariationsAction: some View {
+        HStack(spacing: 8) {
+            Button("Analyze", action: viewModel.analyzeMoveTree)
+                .controlSize(.large)
+                .disabled(viewModel.isTreeAnalyzing)
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+                .opacity(viewModel.isTreeAnalyzing ? 1 : 0)
+            Spacer()
+        }
+    }
+
+    private var analyzeLinesAction: some View {
+        HStack(spacing: 8) {
+            Button("Analyze", action: viewModel.analyze)
+                .controlSize(.large)
+                .disabled(viewModel.isAnalyzing)
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+                .opacity(viewModel.isAnalyzing ? 1 : 0)
+            Spacer()
+        }
+    }
+
+    private var botMoveAction: some View {
+        HStack(spacing: 8) {
+            Button("Play Bot Move", action: viewModel.engineMove)
+                .controlSize(.large)
+                .disabled(viewModel.isEngineThinking)
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+                .opacity(viewModel.isEngineThinking ? 1 : 0)
+            Spacer()
+        }
     }
 
     private var boardBox: some View {
@@ -251,8 +358,6 @@ struct ContentView: View {
                     Button("Rotate Position", action: viewModel.rotatePosition)
                     Spacer()
                     Toggle("Flip Board", isOn: flipBoardBinding.animation(.easeInOut(duration: 0.15)))
-                        .toggleStyle(.switch)
-                    Toggle("Show Threat Map", isOn: $viewModel.showThreatOverlay)
                         .toggleStyle(.switch)
                 }
                 HStack {
@@ -567,29 +672,6 @@ struct ContentView: View {
             }
         }
         return false
-    }
-}
-
-private struct ModeGroupBoxStyle: GroupBoxStyle {
-    let isActive: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            configuration.label
-                .font(.headline)
-            configuration.content
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(NSColor.controlBackgroundColor))
-                        .shadow(color: Color.black.opacity(0.06), radius: 1.5, x: 0, y: 1)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(isActive ? Color.black.opacity(0.6) : Color.clear, lineWidth: 2)
-                )
-        }
     }
 }
 
@@ -979,9 +1061,14 @@ struct BoardGridView: View {
         let isHiddenByAnimation = animatingPiece?.from == square || animatingPiece?.to == square
         let whiteThreats = threatMapWhite[square] ?? 0
         let blackThreats = threatMapBlack[square] ?? 0
+        let baseColor = showThreatOverlay ? Color.white : (isLight ? lightColor : darkColor)
 
         return Rectangle()
-            .fill(isLight ? lightColor : darkColor)
+            .fill(baseColor)
+            .overlay(
+                Rectangle()
+                    .stroke(Color.black.opacity(0.12), lineWidth: 0.5)
+            )
             .overlay(
                 ZStack {
                     if showThreatOverlay {
@@ -1047,35 +1134,13 @@ struct BoardGridView: View {
 
     @ViewBuilder
     private func threatOverlays(white: Int, black: Int) -> some View {
-        let baseCorner: CGFloat = 2
-        let baseInset: CGFloat = 0
-        if white > 0 && black > 0 {
-            let whiteWidth = threatLineWidth(white)
-            let blackWidth = threatLineWidth(black)
-            RoundedRectangle(cornerRadius: baseCorner)
-                .inset(by: baseInset)
-                .strokeBorder(Color.red.opacity(threatOpacity(white)), lineWidth: whiteWidth)
-            RoundedRectangle(cornerRadius: max(1, baseCorner - 0))
-                .inset(by: baseInset + whiteWidth)
-                .strokeBorder(Color.blue.opacity(threatOpacity(black)), lineWidth: blackWidth)
-        } else if white > 0 {
-            RoundedRectangle(cornerRadius: baseCorner)
-                .inset(by: baseInset)
-                .strokeBorder(Color.red.opacity(threatOpacity(white)), lineWidth: threatLineWidth(white))
-        } else if black > 0 {
-            RoundedRectangle(cornerRadius: baseCorner)
-                .inset(by: baseInset)
-                .strokeBorder(Color.blue.opacity(threatOpacity(black)), lineWidth: threatLineWidth(black))
+        if white > 0 {
+            Rectangle()
+                .fill(Color.red.opacity(threatOpacity(white)))
         }
-    }
-
-    private func threatLineWidth(_ count: Int) -> CGFloat {
-        switch count {
-        case 0: return 0
-        case 1: return 3.0
-        case 2: return 4.0
-        case 3: return 5.0
-        default: return 6.0
+        if black > 0 {
+            Rectangle()
+                .fill(Color.blue.opacity(threatOpacity(black)))
         }
     }
 
@@ -1661,6 +1726,9 @@ struct AnimatingPieceOverlay: View {
 }
 
 struct BoardWithCoords: View {
+    static let coordLabelHeight: CGFloat = 18
+    static let coordLabelSpacing: CGFloat = 4
+    static let boardTopInset: CGFloat = coordLabelHeight + coordLabelSpacing
     let boardState: BoardState
     let orientationWhiteAtBottom: Bool
     @Binding var selected: BoardSquare?
@@ -1691,13 +1759,13 @@ struct BoardWithCoords: View {
     private var boardSize: CGFloat { 56 * 8 } // matches square size in BoardGridView
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: Self.coordLabelSpacing) {
             HStack(spacing: 0) {
                 Spacer().frame(width: 18)
                 ForEach(fileLabels, id: \.self) { file in
                     Text(file)
                         .font(.caption)
-                        .frame(width: 56)
+                        .frame(width: 56, height: Self.coordLabelHeight)
                 }
                 Spacer().frame(width: 18)
             }

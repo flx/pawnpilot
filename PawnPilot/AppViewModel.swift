@@ -65,7 +65,7 @@ final class AppViewModel: ObservableObject {
     @Published var statusMessage: String?
     @Published var isAnalyzing = false
     @Published var strength: Int = 5
-    @Published var multiPV: Int = 4
+    @Published var multiPV: Int = 5
     @Published var orientationWhiteAtBottom = true
     @Published var lastMove: ChessMove?
     @Published var legalDestinations: [BoardSquare] = []
@@ -73,7 +73,7 @@ final class AppViewModel: ObservableObject {
     @Published var maxArrowsPerLine: Int = 4
     @Published var randomnessStrength: Int = 1
     @Published var animatingPiece: AnimatedPiece?
-    @Published var interactionMode: InteractionMode = .playAgainstComputer
+    @Published var interactionMode: InteractionMode = .analyzeMoveTree
     @Published var isEngineThinking = false
     @Published var keepPlaying = false
     @Published var recents: [RecentImage] = []
@@ -81,7 +81,7 @@ final class AppViewModel: ObservableObject {
     @Published var strictDepth = true
     @Published var treeNodes: [TreeMoveNode] = []
     @Published var selectedTreeNodeID: TreeMoveNode.ID?
-    @Published var treeBranchCount: Int = 3
+    @Published var treeBranchCount: Int = 5
     @Published var isTreeAnalyzing = false
     @Published var canUndo = false
     @Published var canRedo = false
