@@ -601,6 +601,9 @@ struct EngineLinesView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(letter(for: index))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 14, alignment: .leading)
                     Text(scoreText(line.score))
                     Text(line.moves.joined(separator: " "))
                         .font(.system(.body, design: .monospaced))
@@ -695,10 +698,16 @@ struct TreeNodesView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(visibleNodes) { node in
                 let indent = CGFloat(max(0, node.choicePath.count - 1)) * 14
+                let lineNumber = lineNumberLabel(for: node)
                 HStack(spacing: 8) {
+                    Text(lineNumber ?? "")
+                        .font(.system(.body, design: .monospaced).monospacedDigit())
+                        .frame(width: 20, alignment: .trailing)
+                        .lineLimit(1)
+                        .opacity(lineNumber == nil ? 0 : 1)
+                    Text(scoreTextForBottomPerspective(score: node.score, bottomColor: bottomColor, perspectiveColor: node.scorePerspective))
                     Text(node.uci)
                         .font(.system(.body, design: .monospaced))
-                    Text(scoreTextForBottomPerspective(score: node.score, bottomColor: bottomColor, perspectiveColor: node.scorePerspective))
                     Spacer()
                 }
                 .padding(8)
@@ -771,6 +780,14 @@ struct TreeNodesView: View {
     private func pathHasPrefix(_ path: [Int], _ prefix: [Int]) -> Bool {
         guard path.count >= prefix.count else { return false }
         return Array(path.prefix(prefix.count)) == prefix
+    }
+
+    private func lineNumberLabel(for node: TreeMoveNode) -> String? {
+        let depth = node.choicePath.count
+        let baseDepth = basePath.count
+        guard depth == baseDepth + 1, pathHasPrefix(node.choicePath, basePath) else { return nil }
+        guard let last = node.choicePath.last else { return nil }
+        return String(last + 1)
     }
 }
 
@@ -1006,7 +1023,7 @@ struct ArrowsOverlay: View {
             if singleLineMode {
                 label = "\(idx + 1)"
             } else {
-                label = "\(lineIndex + 1)\(letter(for: idx))"
+                label = "\(letter(for: lineIndex))\(idx + 1)"
             }
             segments.append(ArrowSegment(
                 from: move.from,
