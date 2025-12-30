@@ -680,6 +680,7 @@ struct TreeNodesView: View {
     let lineColor: (Int) -> Color
     let onSelect: (TreeMoveNode.ID?) -> Void
     @State private var isActive = false
+    private let moveIndent: CGFloat = 32
 
     private struct DisplayNode: Identifiable {
         let id: TreeMoveNode.ID
@@ -720,30 +721,18 @@ struct TreeNodesView: View {
         let childNodes = nodes.filter { node in
             pathHasPrefix(node.choicePath, basePath) && node.choicePath.count == baseDepth + 1
         }
+        let childIndent = moveIndent * CGFloat(max(1, baseDepth))
         rows.append(contentsOf: childNodes.map { node in
             DisplayNode(
                 id: node.id,
                 node: node,
                 movesText: node.uci,
-                indent: 14,
+                indent: childIndent,
                 isDeemphasized: false
             )
         })
 
-        if let rootIndex = basePath.first {
-            let rootAlternatives = nodes.filter { node in
-                node.choicePath.count == 1 && node.choicePath.first != rootIndex
-            }
-            rows.append(contentsOf: rootAlternatives.map { node in
-                DisplayNode(
-                    id: node.id,
-                    node: node,
-                    movesText: node.uci,
-                    indent: 0,
-                    isDeemphasized: true
-                )
-            })
-        }
+        rows.append(contentsOf: alternativeDisplayNodes(for: basePath))
 
         return rows
     }
@@ -844,6 +833,31 @@ struct TreeNodesView: View {
         guard depth == baseDepth + 1, pathHasPrefix(node.choicePath, basePath) else { return nil }
         guard let last = node.choicePath.last else { return nil }
         return String(last + 1)
+    }
+
+    private func alternativeDisplayNodes(for selectedPath: [Int]) -> [DisplayNode] {
+        guard !selectedPath.isEmpty else { return [] }
+        var rows: [DisplayNode] = []
+        for depth in stride(from: selectedPath.count, through: 1, by: -1) {
+            let prefix = Array(selectedPath.prefix(depth - 1))
+            let selectedIndex = selectedPath[depth - 1]
+            let siblings = nodes.filter { node in
+                node.choicePath.count == depth
+                    && pathHasPrefix(node.choicePath, prefix)
+                    && node.choicePath.last != selectedIndex
+            }
+            let indent = moveIndent * CGFloat(max(0, depth - 1))
+            rows.append(contentsOf: siblings.map { node in
+                DisplayNode(
+                    id: node.id,
+                    node: node,
+                    movesText: node.uci,
+                    indent: indent,
+                    isDeemphasized: true
+                )
+            })
+        }
+        return rows
     }
 
     private func nodeMapByID() -> [TreeMoveNode.ID: TreeMoveNode] {
