@@ -322,6 +322,8 @@ struct ContentView: View {
                 get: { Double(viewModel.searchDepth) },
                 set: { viewModel.searchDepth = Int($0.rounded()) }
             ), range: 4...30, display: "\(viewModel.searchDepth)")
+            Toggle("Strict depth", isOn: $viewModel.strictDepth)
+                .toggleStyle(.switch)
         }
     }
 
@@ -679,56 +681,108 @@ struct TreeNodesView: View {
     let onSelect: (TreeMoveNode.ID?) -> Void
     @State private var isActive = false
 
-    private var visibleNodes: [TreeMoveNode] {
+    private struct DisplayNode: Identifiable {
+        let id: TreeMoveNode.ID
+        let node: TreeMoveNode
+        let movesText: String
+        let indent: CGFloat
+        let isDeemphasized: Bool
+    }
+
+    private var displayNodes: [DisplayNode] {
         guard let selectedID, let selected = nodes.first(where: { $0.id == selectedID }) else {
-            return nodes.filter { $0.choicePath.count == 1 }
+            return nodes
+                .filter { $0.choicePath.count == 1 }
+                .map { node in
+                    DisplayNode(
+                        id: node.id,
+                        node: node,
+                        movesText: node.uci,
+                        indent: 0,
+                        isDeemphasized: false
+                    )
+                }
         }
-        let selectedPath = selected.choicePath
-        let maxDepth = selectedPath.count + 1
-        return nodes.filter { node in
-            let depth = node.choicePath.count
-            guard depth >= 1, depth <= maxDepth else { return false }
-            if depth == 1 { return true }
-            let prefixLen = depth - 1
-            return Array(node.choicePath.prefix(prefixLen)) == Array(selectedPath.prefix(prefixLen))
+
+        let nodeMap = nodeMapByID()
+        let baseDepth = basePath.count
+        let baseMoves = pathMoves(for: selected, nodeMap: nodeMap).joined(separator: " ")
+        var rows: [DisplayNode] = [
+            DisplayNode(
+                id: selected.id,
+                node: selected,
+                movesText: baseMoves,
+                indent: 0,
+                isDeemphasized: false
+            )
+        ]
+
+        let childNodes = nodes.filter { node in
+            pathHasPrefix(node.choicePath, basePath) && node.choicePath.count == baseDepth + 1
         }
+        rows.append(contentsOf: childNodes.map { node in
+            DisplayNode(
+                id: node.id,
+                node: node,
+                movesText: node.uci,
+                indent: 14,
+                isDeemphasized: false
+            )
+        })
+
+        if let rootIndex = basePath.first {
+            let rootAlternatives = nodes.filter { node in
+                node.choicePath.count == 1 && node.choicePath.first != rootIndex
+            }
+            rows.append(contentsOf: rootAlternatives.map { node in
+                DisplayNode(
+                    id: node.id,
+                    node: node,
+                    movesText: node.uci,
+                    indent: 0,
+                    isDeemphasized: true
+                )
+            })
+        }
+
+        return rows
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(visibleNodes) { node in
-                let indent = CGFloat(max(0, node.choicePath.count - 1)) * 14
-                let lineNumber = lineNumberLabel(for: node)
+            ForEach(displayNodes) { display in
+                let lineNumber = lineNumberLabel(for: display.node)
                 HStack(spacing: 8) {
                     Text(lineNumber ?? "")
                         .font(.system(.body, design: .monospaced).monospacedDigit())
                         .frame(width: 20, alignment: .trailing)
                         .lineLimit(1)
                         .opacity(lineNumber == nil ? 0 : 1)
-                    Text(scoreTextForBottomPerspective(score: node.score, bottomColor: bottomColor, perspectiveColor: node.scorePerspective))
-                    Text(node.uci)
+                    Text(scoreTextForBottomPerspective(score: display.node.score, bottomColor: bottomColor, perspectiveColor: display.node.scorePerspective))
+                    Text(display.movesText)
                         .font(.system(.body, design: .monospaced))
                     Spacer()
                 }
+                .foregroundColor(display.isDeemphasized ? .secondary : .primary)
                 .padding(8)
-                .padding(.leading, indent)
+                .padding(.leading, display.indent)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(backgroundColor(for: node, isSelected: node.id == selectedID))
+                        .fill(backgroundColor(for: display.node, isSelected: display.node.id == selectedID, isDeemphasized: display.isDeemphasized))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(isSelectedBorder(node: node), lineWidth: 2)
+                        .strokeBorder(isSelectedBorder(node: display.node), lineWidth: 2)
                 )
                 .onTapGesture {
-                    if selectedID == node.id {
+                    if selectedID == display.node.id {
                         onSelect(nil)
                     } else {
-                        onSelect(node.id)
+                        onSelect(display.node.id)
                     }
                     isActive = true
                 }
-                .id(node.id)
+                .id(display.node.id)
             }
         }
         .contentShape(Rectangle())
@@ -741,7 +795,7 @@ struct TreeNodesView: View {
     }
 
     private func handleMove(_ direction: MoveCommandDirection) {
-        let currentNodes = visibleNodes
+        let currentNodes = displayNodes
         guard !currentNodes.isEmpty else { return }
         let currentIndex = selectedID.flatMap { id in
             currentNodes.firstIndex(where: { $0.id == id })
@@ -766,15 +820,17 @@ struct TreeNodesView: View {
         node.id == selectedID ? Color.black.opacity(0.6) : Color.clear
     }
 
-    private func backgroundColor(for node: TreeMoveNode, isSelected: Bool) -> Color {
+    private func backgroundColor(for node: TreeMoveNode, isSelected: Bool, isDeemphasized: Bool) -> Color {
         let depth = node.choicePath.count
         let baseDepth = basePath.count
         let isChild = depth == baseDepth + 1 && pathHasPrefix(node.choicePath, basePath)
         let baseOpacity: Double = isSelected ? 0.45 : 0.25
         if isChild, let childIndex = node.choicePath.last {
-            return lineColor(childIndex).opacity(baseOpacity)
+            let opacity = isDeemphasized ? baseOpacity * 0.6 : baseOpacity
+            return lineColor(childIndex).opacity(opacity)
         }
-        return Color.gray.opacity(isSelected ? 0.30 : 0.12)
+        let grayOpacity = isSelected ? 0.30 : 0.12
+        return Color.gray.opacity(isDeemphasized ? grayOpacity * 0.6 : grayOpacity)
     }
 
     private func pathHasPrefix(_ path: [Int], _ prefix: [Int]) -> Bool {
@@ -788,6 +844,28 @@ struct TreeNodesView: View {
         guard depth == baseDepth + 1, pathHasPrefix(node.choicePath, basePath) else { return nil }
         guard let last = node.choicePath.last else { return nil }
         return String(last + 1)
+    }
+
+    private func nodeMapByID() -> [TreeMoveNode.ID: TreeMoveNode] {
+        var map: [TreeMoveNode.ID: TreeMoveNode] = [:]
+        for node in nodes {
+            map[node.id] = node
+        }
+        return map
+    }
+
+    private func pathMoves(for node: TreeMoveNode, nodeMap: [TreeMoveNode.ID: TreeMoveNode]) -> [String] {
+        var moves: [String] = []
+        var current: TreeMoveNode? = node
+        while let entry = current {
+            moves.append(entry.uci)
+            if let parentID = entry.parentID {
+                current = nodeMap[parentID]
+            } else {
+                current = nil
+            }
+        }
+        return moves.reversed()
     }
 }
 

@@ -78,6 +78,7 @@ final class AppViewModel: ObservableObject {
     @Published var keepPlaying = false
     @Published var recents: [RecentImage] = []
     @Published var searchDepth: Int = 8
+    @Published var strictDepth = true
     @Published var treeNodes: [TreeMoveNode] = []
     @Published var selectedTreeNodeID: TreeMoveNode.ID?
     @Published var treeBranchCount: Int = 3
@@ -217,7 +218,7 @@ final class AppViewModel: ObservableObject {
         let options = analysisOptions(multiPV: max(multiPV, 1))
         Task {
             do {
-                let lines = try await engine.analyze(fen: boardState.fen, options: options, requireFullDepth: true)
+                let lines = try await engine.analyze(fen: boardState.fen, options: options, requireFullDepth: strictDepth)
                 guard token == analysisToken, interactionMode == .analyzeLines else { return }
                 self.engineLines = lines
                 self.statusMessage = lines.isEmpty ? "Engine returned no lines." : "Analysis ready."
@@ -760,7 +761,7 @@ final class AppViewModel: ObservableObject {
                 lines = try await treeEngine.analyze(
                     fen: state.fen,
                     options: options,
-                    requireFullDepth: false
+                    requireFullDepth: strictDepth
                 )
                 uniqueFirstMoves = countUniqueFirstMoves(in: lines)
                 if uniqueFirstMoves >= branchCount { break }
