@@ -182,7 +182,6 @@ struct ContentView: View {
     private var engineParametersBox: some View {
         GroupBox("Engine Parameters") {
             VStack(alignment: .leading, spacing: 8) {
-                strengthControl
                 analysisControls
             }
         }
@@ -191,6 +190,7 @@ struct ContentView: View {
     private var playAgainstComputerBox: some View {
         GroupBox("Play Against Bot") {
             VStack(alignment: .leading, spacing: 8) {
+                strengthControl
                 randomnessControl
                 HStack(spacing: 6) {
                     Button("Bot Move", action: viewModel.engineMove)

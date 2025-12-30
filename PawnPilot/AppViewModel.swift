@@ -695,9 +695,9 @@ final class AppViewModel: ObservableObject {
             multiPV: max(multiPV, 1),
             movetimeMs: nil,
             depth: max(1, searchDepth),
-            strength: strength,
-            limitStrength: strength < 5,
-            elo: elo(for: strength),
+            strength: 5,
+            limitStrength: false,
+            elo: elo(for: 5),
             hash: hash,
             threads: max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
         )
