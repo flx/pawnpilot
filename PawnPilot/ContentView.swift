@@ -688,6 +688,7 @@ struct TreeNodesView: View {
         let movesText: String
         let indent: CGFloat
         let isDeemphasized: Bool
+        let pathNodes: [TreeMoveNode]?
     }
 
     private var displayNodes: [DisplayNode] {
@@ -700,21 +701,24 @@ struct TreeNodesView: View {
                         node: node,
                         movesText: node.uci,
                         indent: 0,
-                        isDeemphasized: false
+                        isDeemphasized: false,
+                        pathNodes: nil
                     )
                 }
         }
 
         let nodeMap = nodeMapByID()
         let baseDepth = basePath.count
-        let baseMoves = pathMoves(for: selected, nodeMap: nodeMap).joined(separator: " ")
+        let basePathNodes = pathNodes(for: selected, nodeMap: nodeMap)
+        let baseMoves = basePathNodes.map(\.uci).joined(separator: " ")
         var rows: [DisplayNode] = [
             DisplayNode(
                 id: selected.id,
                 node: selected,
                 movesText: baseMoves,
                 indent: 0,
-                isDeemphasized: false
+                isDeemphasized: false,
+                pathNodes: basePathNodes
             )
         ]
 
@@ -728,7 +732,8 @@ struct TreeNodesView: View {
                 node: node,
                 movesText: node.uci,
                 indent: childIndent,
-                isDeemphasized: false
+                isDeemphasized: false,
+                pathNodes: nil
             )
         })
 
@@ -748,8 +753,12 @@ struct TreeNodesView: View {
                         .lineLimit(1)
                         .opacity(lineNumber == nil ? 0 : 1)
                     Text(scoreTextForBottomPerspective(score: display.node.score, bottomColor: bottomColor, perspectiveColor: display.node.scorePerspective))
-                    Text(display.movesText)
-                        .font(.system(.body, design: .monospaced))
+                    if let pathNodes = display.pathNodes, !pathNodes.isEmpty {
+                        movePathTokens(pathNodes)
+                    } else {
+                        Text(display.movesText)
+                            .font(.system(.body, design: .monospaced))
+                    }
                     Spacer()
                 }
                 .foregroundColor(display.isDeemphasized ? .secondary : .primary)
@@ -853,7 +862,8 @@ struct TreeNodesView: View {
                     node: node,
                     movesText: node.uci,
                     indent: indent,
-                    isDeemphasized: true
+                    isDeemphasized: true,
+                    pathNodes: nil
                 )
             })
         }
@@ -868,18 +878,54 @@ struct TreeNodesView: View {
         return map
     }
 
-    private func pathMoves(for node: TreeMoveNode, nodeMap: [TreeMoveNode.ID: TreeMoveNode]) -> [String] {
-        var moves: [String] = []
+    private func pathNodes(for node: TreeMoveNode, nodeMap: [TreeMoveNode.ID: TreeMoveNode]) -> [TreeMoveNode] {
+        var nodes: [TreeMoveNode] = []
         var current: TreeMoveNode? = node
         while let entry = current {
-            moves.append(entry.uci)
+            nodes.append(entry)
             if let parentID = entry.parentID {
                 current = nodeMap[parentID]
             } else {
                 current = nil
             }
         }
-        return moves.reversed()
+        return nodes.reversed()
+    }
+
+    private func movePathTokens(_ pathNodes: [TreeMoveNode]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(Array(pathNodes.enumerated()), id: \.element.id) { index, node in
+                let isCurrent = index == pathNodes.count - 1
+                if isCurrent {
+                    Text(node.uci)
+                        .font(.system(.body, design: .monospaced))
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(tokenFill(isCurrent: true))
+                        )
+                } else {
+                    Button {
+                        onSelect(node.id)
+                    } label: {
+                        Text(node.uci)
+                            .font(.system(.body, design: .monospaced))
+                            .padding(.vertical, 2)
+                            .padding(.horizontal, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(tokenFill(isCurrent: false))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func tokenFill(isCurrent: Bool) -> Color {
+        isCurrent ? Color.clear : Color.black.opacity(0.18)
     }
 }
 

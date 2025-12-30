@@ -77,7 +77,7 @@ final class AppViewModel: ObservableObject {
     @Published var isEngineThinking = false
     @Published var keepPlaying = false
     @Published var recents: [RecentImage] = []
-    @Published var searchDepth: Int = 8
+    @Published var searchDepth: Int = 12
     @Published var strictDepth = true
     @Published var treeNodes: [TreeMoveNode] = []
     @Published var selectedTreeNodeID: TreeMoveNode.ID?
