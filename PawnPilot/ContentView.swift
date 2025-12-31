@@ -223,7 +223,7 @@ struct ContentView: View {
         }
         .padding(.horizontal)
         .padding(.bottom)
-        .frame(minWidth: 960, maxWidth: .infinity, minHeight: 700, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 966, maxWidth: .infinity, minHeight: 872, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var mainContent: some View {
