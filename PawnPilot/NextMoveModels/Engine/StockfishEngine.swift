@@ -8,11 +8,11 @@ public enum StockfishError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notFound:
-            return "Stockfish engine not found in app bundle."
+            return String(localized: "Stockfish engine not found in app bundle.")
         case .startFailed:
-            return "Stockfish failed to launch."
+            return String(localized: "Stockfish failed to launch.")
         case .timeout:
-            return "Engine timed out while searching."
+            return String(localized: "Engine timed out while searching.")
         }
     }
 }

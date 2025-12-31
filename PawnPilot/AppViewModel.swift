@@ -121,7 +121,7 @@ final class AppViewModel: ObservableObject {
 
     func loadImage(from url: URL) {
         guard let nsImage = NSImage(contentsOf: url) else {
-            statusMessage = "Unable to load image."
+            statusMessage = String(localized: "Unable to load image.")
             return
         }
         loadImage(nsImage: nsImage, label: url.lastPathComponent)
@@ -129,7 +129,7 @@ final class AppViewModel: ObservableObject {
 
     func loadImage(nsImage: NSImage, label: String? = nil) {
         guard let cgImage = nsImage.cgImage else {
-            statusMessage = "Unable to load image."
+            statusMessage = String(localized: "Unable to load image.")
             return
         }
         let resolvedLabel = label ?? nextDroppedLabel()
@@ -140,7 +140,7 @@ final class AppViewModel: ObservableObject {
     func loadRecent(_ recent: RecentImage) {
         addRecent(image: recent.image, label: recent.label)
         guard let cgImage = recent.image.cgImage else {
-            statusMessage = "Unable to load image."
+            statusMessage = String(localized: "Unable to load image.")
             return
         }
         detect(cgImage: cgImage)
@@ -151,7 +151,7 @@ final class AppViewModel: ObservableObject {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.title = "Choose a chessboard image"
+        panel.title = String(localized: "Choose a chessboard image")
         if panel.runModal() == .OK, let url = panel.url {
             loadImage(from: url)
         }
@@ -164,7 +164,7 @@ final class AppViewModel: ObservableObject {
         treeNodes = []
         selectedTreeNodeID = nil
         detectionStatus = .running
-        statusMessage = "Detecting board..."
+        statusMessage = String(localized: "Detecting board...")
         Task {
             let output = await pipeline.process(cgImage: cgImage)
             var state = BoardState(fromDetection: output)
@@ -175,7 +175,7 @@ final class AppViewModel: ObservableObject {
             // Orient the UI to match the screenshot (white at top when flip is suggested).
             self.orientationWhiteAtBottom = !output.suggestedFlipForFEN
             self.detectionStatus = .succeeded(output)
-            self.statusMessage = "Detected position."
+            self.statusMessage = String(localized: "Detected position.")
             self.logWarnings(output.warnings)
             self.engineLines = []
             self.selectedEngineLineID = nil
@@ -214,14 +214,16 @@ final class AppViewModel: ObservableObject {
         let token = UUID()
         analysisToken = token
         isAnalyzing = true
-        statusMessage = "Analyzing..."
+        statusMessage = String(localized: "Analyzing...")
         let options = analysisOptions(multiPV: max(multiPV, 1))
         Task {
             do {
                 let lines = try await engine.analyze(fen: boardState.fen, options: options, requireFullDepth: strictDepth)
                 guard token == analysisToken, interactionMode == .analyzeLines else { return }
                 self.engineLines = lines
-                self.statusMessage = lines.isEmpty ? "Engine returned no lines." : "Analysis ready."
+                self.statusMessage = lines.isEmpty
+                    ? String(localized: "Engine returned no lines.")
+                    : String(localized: "Analysis ready.")
             } catch {
                 guard token == analysisToken, interactionMode == .analyzeLines else { return }
                 self.engineLines = []
@@ -255,7 +257,7 @@ final class AppViewModel: ObservableObject {
         treeExpansionTask?.cancel()
         treeRootState = boardState
         treeRootActiveColor = boardState.activeColor
-        statusMessage = "Analyzing move tree..."
+        statusMessage = String(localized: "Analyzing move tree...")
         treeNodes = []
         let token = UUID()
         treeToken = token
@@ -341,7 +343,7 @@ final class AppViewModel: ObservableObject {
         treeNodes = []
         selectedTreeNodeID = nil
         isEngineThinking = true
-        statusMessage = "Engine thinking..."
+        statusMessage = String(localized: "Engine thinking...")
         let options = EngineOptions(
             multiPV: max(randomnessStrength, multiPV, 1),
             movetimeMs: nil,
@@ -361,11 +363,14 @@ final class AppViewModel: ObservableObject {
                     let uci = line.moves.first,
                     let move = boardState.move(fromUCI: uci)
                 else {
-                    self.statusMessage = "Engine returned no move."
+                    self.statusMessage = String(localized: "Engine returned no move.")
                     return
                 }
                 await self.performAnimatedMove(move: move)
-                self.statusMessage = "Engine played \(uci)."
+                self.statusMessage = String.localizedStringWithFormat(
+                    NSLocalizedString("Engine played %@.", comment: "Status after engine move"),
+                    uci
+                )
                 _ = self.updateStatusForGameOver()
             } catch {
                 self.statusMessage = error.localizedDescription
@@ -394,7 +399,7 @@ final class AppViewModel: ObservableObject {
     func applyUserMove(from: BoardSquare, to: BoardSquare) {
         let move = ChessMove(from: from, to: to)
         guard moveValidator.isLegal(move: move, in: boardState) else {
-            statusMessage = "Illegal move."
+            statusMessage = String(localized: "Illegal move.")
             return
         }
         invalidateAnalysis()
@@ -443,7 +448,7 @@ final class AppViewModel: ObservableObject {
         lastMove = nil
         legalDestinations = []
         resetHistory()
-        statusMessage = "Board cleared."
+        statusMessage = String(localized: "Board cleared.")
     }
 
     func rotatePosition() {
@@ -457,12 +462,12 @@ final class AppViewModel: ObservableObject {
         lastMove = nil
         legalDestinations = []
         resetHistory()
-        statusMessage = "Position rotated 180°."
+        statusMessage = String(localized: "Position rotated 180°.")
     }
 
     private func performAnimatedMove(move: ChessMove) async {
         guard moveValidator.isLegal(move: move, in: boardState) else {
-            await MainActor.run { statusMessage = "Illegal move." }
+            await MainActor.run { statusMessage = String(localized: "Illegal move.") }
             return
         }
         guard let piece = boardState.piece(at: move.from) else { return }
@@ -492,7 +497,7 @@ final class AppViewModel: ObservableObject {
         selectedTreeNodeID = nil
         legalDestinations = []
         animatingPiece = nil
-        statusMessage = "Undid move."
+        statusMessage = String(localized: "Undid move.")
         updateUndoRedoState()
     }
 
@@ -508,7 +513,7 @@ final class AppViewModel: ObservableObject {
         selectedTreeNodeID = nil
         legalDestinations = []
         animatingPiece = nil
-        statusMessage = "Redid move."
+        statusMessage = String(localized: "Redid move.")
         updateUndoRedoState()
     }
 
@@ -533,7 +538,10 @@ final class AppViewModel: ObservableObject {
 
     private func nextDroppedLabel() -> String {
         droppedImageCounter += 1
-        return "Dropped \(droppedImageCounter)"
+        return String.localizedStringWithFormat(
+            NSLocalizedString("Dropped %d", comment: "Label for dropped images"),
+            droppedImageCounter
+        )
     }
 
     private func currentSnapshot() -> BoardSnapshot {
@@ -578,9 +586,11 @@ final class AppViewModel: ObservableObject {
     private func gameOverMessage(for state: BoardState) -> String? {
         guard !moveGenerator.hasAnyLegalMove(in: state) else { return nil }
         if moveValidator.isInCheck(state: state) {
-            return state.activeColor == "w" ? "White is check mate" : "Black is check mate"
+            return state.activeColor == "w"
+                ? String(localized: "White is check mate")
+                : String(localized: "Black is check mate")
         } else {
-            return "Draw through Stalemate"
+            return String(localized: "Draw through Stalemate")
         }
     }
 
@@ -742,12 +752,14 @@ final class AppViewModel: ObservableObject {
         guard let state, pliesToExpand > 0 else {
             treeExpandedPaths.insert(baseKey)
             isTreeAnalyzing = false
-            statusMessage = "Tree analysis ready."
+            statusMessage = String(localized: "Tree analysis ready.")
             return
         }
 
         isTreeAnalyzing = true
-        statusMessage = basePath.isEmpty ? "Analyzing move tree..." : "Expanding branch..."
+        statusMessage = basePath.isEmpty
+            ? String(localized: "Analyzing move tree...")
+            : String(localized: "Expanding branch...")
 
         do {
             let maxAttempts = 3
@@ -780,11 +792,14 @@ final class AppViewModel: ObservableObject {
             mergeTreeNodes(newNodes)
             treeExpandedPaths.insert(baseKey)
             if newNodes.isEmpty {
-                statusMessage = "Engine returned no lines."
+                statusMessage = String(localized: "Engine returned no lines.")
             } else if uniqueFirstMoves < branchCount {
-                statusMessage = "Only \(uniqueFirstMoves) unique moves found."
+                statusMessage = String.localizedStringWithFormat(
+                    NSLocalizedString("Only %d unique moves found.", comment: "Tree analysis returned fewer unique moves than requested"),
+                    uniqueFirstMoves
+                )
             } else {
-                statusMessage = "Tree analysis ready."
+                statusMessage = String(localized: "Tree analysis ready.")
             }
         } catch {
             guard token == treeToken, interactionMode == .analyzeMoveTree else { return }

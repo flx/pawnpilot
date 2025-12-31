@@ -69,6 +69,29 @@ struct ContentView: View {
     @State private var nextMoveSelection: String
     @State private var selectedTab: RightPanelTab
     private let boardColumnWidth: CGFloat = 492
+    private static let tabViewTopInset: CGFloat = {
+        let tabView = NSTabView(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
+        tabView.tabViewType = .topTabsBezelBorder
+        tabView.tabViewBorderType = .line
+        return max(0, tabView.bounds.maxY - tabView.contentRect.maxY - 3)
+    }()
+    private static let sliderLabelWidth: CGFloat = {
+        let labels = [
+            String(localized: "Search Depth"),
+            String(localized: "Alternatives/move"),
+            String(localized: "Display plies"),
+            String(localized: "Lines"),
+            String(localized: "Strength"),
+            String(localized: "Randomness")
+        ]
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let widths = labels.map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+        let maxWidth = widths.max() ?? 110
+        return ceil(maxWidth + 8)
+    }()
+    private var rightPanelHeight: CGFloat {
+        BoardWithCoords.boardTopInset + BoardWithCoords.boardSize
+    }
     private static let boardHelpItems: [HelpItem] = [
         HelpItem(
             id: "next-move",
@@ -183,6 +206,26 @@ struct ContentView: View {
         _selectedTab = State(initialValue: Self.tab(for: viewModel.interactionMode))
     }
 
+    private var tabItems: [AppKitTabItem<RightPanelTab>] {
+        [
+            AppKitTabItem(
+                title: String(localized: "Analyze Variations"),
+                tag: .analyzeVariations,
+                view: AnyView(analyzeVariationsPanel)
+            ),
+            AppKitTabItem(
+                title: String(localized: "Analyze Best Lines"),
+                tag: .analyzeBestLines,
+                view: AnyView(analyzeBestLinesPanel)
+            ),
+            AppKitTabItem(
+                title: String(localized: "Play Bot"),
+                tag: .playBot,
+                view: AnyView(playBotPanel)
+            )
+        ]
+    }
+
     private static func tab(for mode: InteractionMode) -> RightPanelTab {
         switch mode {
         case .analyzeMoveTree:
@@ -223,7 +266,7 @@ struct ContentView: View {
         }
         .padding(.horizontal)
         .padding(.bottom)
-        .frame(minWidth: 966, maxWidth: .infinity, minHeight: 872, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 1100, maxWidth: .infinity, minHeight: 950, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var mainContent: some View {
@@ -278,11 +321,17 @@ struct ContentView: View {
     }
 
     private var rightPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            modeSwitcher
-            rightPanelContent
+        VStack(spacing: 0) {
+            Spacer().frame(height: max(0, BoardWithCoords.boardTopInset - Self.tabViewTopInset))
+            AppKitTabView(
+                selection: $selectedTab,
+                items: tabItems,
+                borderType: .line,
+                tabType: .topTabsBezelBorder
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 320, alignment: .topLeading)
+        .frame(minWidth: 320, maxWidth: .infinity, minHeight: rightPanelHeight, maxHeight: rightPanelHeight, alignment: .topLeading)
         .onChange(of: selectedTab) { newValue in
             let mode = Self.mode(for: newValue)
             if viewModel.interactionMode != mode {
@@ -297,60 +346,36 @@ struct ContentView: View {
         }
     }
 
-    private var modeSwitcher: some View {
-        HStack {
-            Spacer()
-            Picker("Mode", selection: $selectedTab) {
-                Text("Analyze Variations").tag(RightPanelTab.analyzeVariations)
-                Text("Analyze Best Lines").tag(RightPanelTab.analyzeBestLines)
-                Text("Play Bot").tag(RightPanelTab.playBot)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            Spacer()
-        }
-        .padding(.top, BoardWithCoords.boardTopInset)
-    }
-
-    @ViewBuilder
-    private var rightPanelContent: some View {
-        switch selectedTab {
-        case .analyzeVariations:
-            analyzeVariationsPanel
-        case .analyzeBestLines:
-            analyzeBestLinesPanel
-        case .playBot:
-            playBotPanel
-        }
-    }
-
     private var analyzeVariationsPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             boardBox
             engineParametersBox
             analysisVariationsBox
             analyzeVariationsAction
         }
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var analyzeBestLinesPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             boardBox
             engineParametersBox
             analysisLinesBox
             analyzeLinesAction
         }
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var playBotPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             boardBox
             engineParametersBox
             botParametersBox
             botMoveAction
         }
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -359,6 +384,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 analysisControls
             }
+            .padding(10)
         } label: {
             groupBoxHeader("Engine Parameters", items: Self.engineHelpItems)
         }
@@ -369,6 +395,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 treeBranchControl
             }
+            .padding(10)
         } label: {
             groupBoxHeader("Analysis Parameters", items: Self.analysisVariationsHelpItems)
         }
@@ -380,6 +407,7 @@ struct ContentView: View {
                 linesControl
                 arrowCountControl
             }
+            .padding(10)
         } label: {
             groupBoxHeader("Analysis Parameters", items: Self.analysisLinesHelpItems)
         }
@@ -394,6 +422,7 @@ struct ContentView: View {
                     .toggleStyle(.switch)
                     .disabled(viewModel.interactionMode != .playAgainstComputer)
             }
+            .padding(10)
         } label: {
             groupBoxHeader("Bot Parameters", items: Self.botHelpItems)
         }
@@ -417,6 +446,11 @@ struct ContentView: View {
             Button("Analyze", action: viewModel.analyze)
                 .controlSize(.large)
                 .disabled(viewModel.isAnalyzing)
+            Button("Play Selected Moves") {
+                viewModel.playSelectedLine()
+            }
+            .controlSize(.large)
+            .disabled(viewModel.selectedEngineLineID == nil || viewModel.isAnalyzing)
             ProgressView()
                 .controlSize(.small)
                 .frame(width: 16, height: 16)
@@ -438,7 +472,7 @@ struct ContentView: View {
         }
     }
 
-    private func groupBoxHeader(_ title: String, items: [HelpItem]) -> some View {
+    private func groupBoxHeader(_ title: LocalizedStringKey, items: [HelpItem]) -> some View {
         HStack(spacing: 6) {
             Text(title)
             HoverHelpIcon(items: items)
@@ -456,7 +490,7 @@ struct ContentView: View {
                         Label("Rotate", systemImage: "rotate.right")
                             .labelStyle(.iconOnly)
                     }
-                    .help("Rotate Position")
+                    .help(String(localized: "Rotate Position"))
                     Spacer()
                 }
                 HStack(spacing: 8) {
@@ -469,6 +503,7 @@ struct ContentView: View {
                     Spacer()
                 }
             }
+            .padding(10)
         } label: {
             groupBoxHeader("Board", items: Self.boardHelpItems)
         }
@@ -547,10 +582,10 @@ struct ContentView: View {
         }
     }
 
-    private func labeledSlider(title: String, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
+    private func labeledSlider(title: LocalizedStringKey, value: Binding<Double>, range: ClosedRange<Double>, display: String) -> some View {
         HStack {
             Text(title)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: Self.sliderLabelWidth, alignment: .leading)
             Slider(value: value, in: range, step: 1)
             Text(display)
                 .font(.system(.body, design: .monospaced))
@@ -609,19 +644,28 @@ struct ContentView: View {
             Text("Detection")
                 .font(.caption)
                 .foregroundColor(.secondary)
-            switch viewModel.detectionStatus {
-            case .idle:
-                Text("Idle").foregroundColor(.secondary)
-            case .running:
-                Label("Detecting…", systemImage: "hourglass")
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .foregroundColor(.red)
-            case .succeeded(let output):
-                Label("Detected \(output.fen)", systemImage: "checkmark.circle")
-                    .lineLimit(2)
+        switch viewModel.detectionStatus {
+        case .idle:
+            Text("Idle").foregroundColor(.secondary)
+        case .running:
+            Label("Detecting…", systemImage: "hourglass")
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundColor(.red)
+        case .succeeded(let output):
+            Label {
+                Text(
+                    String.localizedStringWithFormat(
+                        NSLocalizedString("Detected %@", comment: "Detection output status"),
+                        output.fen
+                    )
+                )
+                .lineLimit(2)
+            } icon: {
+                Image(systemName: "checkmark.circle")
             }
         }
+    }
     }
 
     private var recentsView: some View {
@@ -662,21 +706,16 @@ struct ContentView: View {
         }
     }
 
+    private var engineSectionTitle: LocalizedStringKey {
+        viewModel.interactionMode == .analyzeMoveTree ? "Variations" : "Best Lines"
+    }
+
     private var engineSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(viewModel.interactionMode == .analyzeMoveTree ? "Variations" : "Best Lines")
+                Text(engineSectionTitle)
                     .font(.headline)
                 Spacer()
-                if viewModel.interactionMode == .analyzeLines {
-                    Button("Play Selected Moves") {
-                        viewModel.playSelectedLine()
-                    }
-                    .disabled(
-                        viewModel.selectedEngineLineID == nil
-                            || viewModel.isAnalyzing
-                    )
-                }
             }
             Group {
                 if viewModel.interactionMode == .playAgainstComputer {
@@ -685,7 +724,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if viewModel.interactionMode == .analyzeMoveTree {
                     if viewModel.treeNodes.isEmpty {
-                        Text("No tree output yet.")
+                        Text("No analysis output yet.")
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
@@ -710,7 +749,7 @@ struct ContentView: View {
                         }
                     }
                 } else if displayedEngineLines.isEmpty {
-                    Text("No engine output yet.")
+                    Text("No analysis output yet.")
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -739,7 +778,7 @@ struct ContentView: View {
 
     private var statusBar: some View {
         HStack {
-            Text(viewModel.statusMessage ?? "Ready.")
+            Text(viewModel.statusMessage ?? String(localized: "Ready."))
                 .foregroundColor(.secondary)
             Spacer()
         }
@@ -1618,8 +1657,104 @@ private func scoreText(_ score: EngineScore) -> String {
 
 private struct HelpItem: Identifiable {
     let id: String
+    let title: LocalizedStringKey
+    let body: LocalizedStringKey
+}
+
+private struct AppKitTabItem<Selection: Hashable> {
     let title: String
-    let body: String
+    let tag: Selection
+    let view: AnyView
+}
+
+private struct AppKitTabView<Selection: Hashable>: NSViewRepresentable {
+    @Binding var selection: Selection
+    let items: [AppKitTabItem<Selection>]
+    let borderType: NSTabView.TabViewBorderType
+    let tabType: NSTabView.TabType
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSTabView {
+        let tabView = NSTabView()
+        tabView.delegate = context.coordinator
+        tabView.tabViewBorderType = borderType
+        tabView.tabViewType = tabType
+        applyItems(to: tabView)
+        selectCurrent(in: tabView)
+        return tabView
+    }
+
+    func updateNSView(_ nsView: NSTabView, context: Context) {
+        nsView.tabViewBorderType = borderType
+        nsView.tabViewType = tabType
+        updateItems(in: nsView)
+        selectCurrent(in: nsView)
+    }
+
+    private func applyItems(to tabView: NSTabView) {
+        for item in items {
+            let tabItem = NSTabViewItem(identifier: item.tag)
+            tabItem.label = item.title
+            tabItem.view = hostingView(for: item.view)
+            tabView.addTabViewItem(tabItem)
+        }
+    }
+
+    private func updateItems(in tabView: NSTabView) {
+        let existingTags = tabView.tabViewItems.compactMap { $0.identifier as? Selection }
+        let desiredTags = items.map(\.tag)
+        if existingTags != desiredTags {
+            let existingItems = tabView.tabViewItems
+            for item in existingItems {
+                tabView.removeTabViewItem(item)
+            }
+            applyItems(to: tabView)
+            return
+        }
+
+        for (index, item) in items.enumerated() {
+            let tabItem = tabView.tabViewItems[index]
+            tabItem.label = item.title
+            if let hosting = tabItem.view as? NSHostingView<AnyView> {
+                hosting.rootView = item.view
+            } else {
+                tabItem.view = hostingView(for: item.view)
+            }
+        }
+    }
+
+    private func selectCurrent(in tabView: NSTabView) {
+        guard let match = tabView.tabViewItems.first(where: { ($0.identifier as? Selection) == selection }) else {
+            return
+        }
+        if tabView.selectedTabViewItem !== match {
+            tabView.selectTabViewItem(match)
+        }
+    }
+
+    private func hostingView(for view: AnyView) -> NSHostingView<AnyView> {
+        let hosting = NSHostingView(rootView: view)
+        hosting.autoresizingMask = [.width, .height]
+        return hosting
+    }
+
+    final class Coordinator: NSObject, NSTabViewDelegate {
+        private var parent: AppKitTabView
+
+        init(_ parent: AppKitTabView) {
+            self.parent = parent
+        }
+
+        func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+            guard let tag = tabViewItem?.identifier as? Selection else { return }
+            if parent.selection != tag {
+                parent.selection = tag
+            }
+        }
+    }
 }
 
 private struct HoverHelpIcon: View {
@@ -1683,11 +1818,12 @@ private func scoreStrip(lines: [EngineLine], bottomColor: String, perspectiveCol
         bottomColor: bottomColor,
         perspectiveColor: perspectiveColor
     )
-    let label = bottomColor == "w" ? "Score for white" : "Score for black"
+    let label = bottomColor == "w"
+        ? String(localized: "Score for white")
+        : String(localized: "Score for black")
     return HStack {
         Spacer()
         Text("\(label): \(displayScore)")
-            .font(.system(.body, design: .monospaced))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
@@ -1881,6 +2017,8 @@ struct AnimatingPieceOverlay: View {
 }
 
 struct BoardWithCoords: View {
+    static let squareSize: CGFloat = 56
+    static let boardSize: CGFloat = squareSize * 8
     static let coordLabelHeight: CGFloat = 18
     static let coordLabelSpacing: CGFloat = 4
     static let boardTopInset: CGFloat = coordLabelHeight + coordLabelSpacing
@@ -1910,8 +2048,6 @@ struct BoardWithCoords: View {
         let labels = ["1","2","3","4","5","6","7","8"]
         return orientationWhiteAtBottom ? labels : labels.reversed()
     }
-
-    private var boardSize: CGFloat { 56 * 8 } // matches square size in BoardGridView
 
     var body: some View {
         VStack(spacing: Self.coordLabelSpacing) {
@@ -1945,12 +2081,12 @@ struct BoardWithCoords: View {
                         animatingPiece: animatingPiece,
                         onMove: onMove
                     )
-                    .frame(width: boardSize, height: boardSize)
+                    .frame(width: Self.boardSize, height: Self.boardSize)
                     AnimatingPieceOverlay(
                         orientationWhiteAtBottom: orientationWhiteAtBottom,
                         animatingPiece: animatingPiece
                     )
-                    .frame(width: boardSize, height: boardSize)
+                    .frame(width: Self.boardSize, height: Self.boardSize)
                     ArrowsOverlay(
                         boardState: boardState,
                         orientationWhiteAtBottom: orientationWhiteAtBottom,
@@ -1958,7 +2094,7 @@ struct BoardWithCoords: View {
                         selectedEngineLineID: selectedEngineLineID,
                         maxSegments: maxSegments
                     )
-                    .frame(width: boardSize, height: boardSize)
+                    .frame(width: Self.boardSize, height: Self.boardSize)
                     if !treePaths.isEmpty {
                         TreeArrowsOverlay(
                             boardState: boardState,
@@ -1966,15 +2102,15 @@ struct BoardWithCoords: View {
                             paths: treePaths,
                             maxPlies: treeMaxPlies
                         )
-                        .frame(width: boardSize, height: boardSize)
+                        .frame(width: Self.boardSize, height: Self.boardSize)
                     }
                 }
-                .frame(width: boardSize, height: boardSize)
+                .frame(width: Self.boardSize, height: Self.boardSize)
                 .overlay {
                     if dropHighlight {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8, 4]))
-                            .frame(width: boardSize + 12, height: boardSize + 12)
+                            .frame(width: Self.boardSize + 12, height: Self.boardSize + 12)
                             .allowsHitTesting(false)
                     }
                 }
