@@ -69,6 +69,86 @@ struct ContentView: View {
     @State private var nextMoveSelection: String
     @State private var selectedTab: RightPanelTab
     private let boardColumnWidth: CGFloat = 492
+    private static let boardHelpItems: [HelpItem] = [
+        HelpItem(
+            id: "next-move",
+            title: "Next move",
+            body: "Indicates which side has the next move - you can change who has the next move, in particular after board detection from screenshot."
+        ),
+        HelpItem(
+            id: "flip-board",
+            title: "Flip Board",
+            body: "Changes the viewing orientation only."
+        ),
+        HelpItem(
+            id: "rotate",
+            title: "Rotate",
+            body: "Rotates the board without moving the pieces. If a1 was bottom left before it will be top right afterwards. This helps to correct boards when board detection did not accurately guess which side was black or white. Affects which direction white or black pawns move."
+        ),
+        HelpItem(
+            id: "open-image",
+            title: "Open Image…",
+            body: "Import a screenshot and run board detection. You can alternatively drag the screenshot on the chessboard."
+        ),
+        HelpItem(
+            id: "reset",
+            title: "Reset",
+            body: "Return the board to starting position."
+        ),
+        HelpItem(
+            id: "undo-redo",
+            title: "Undo / Redo",
+            body: "Step backward or forward through move history."
+        )
+    ]
+    private static let engineHelpItems: [HelpItem] = [
+        HelpItem(
+            id: "search-depth",
+            title: "Search Depth",
+            body: "Controls how deep the engine searches. Higher is slower but more accurate. Search depth 30 is very slow."
+        ),
+        HelpItem(
+            id: "strict-depth",
+            title: "Strict depth",
+            body: "When on, waits for all lines to reach the target depth before returning. Slower but more accurate."
+        )
+    ]
+    private static let analysisVariationsHelpItems: [HelpItem] = [
+        HelpItem(
+            id: "alternatives",
+            title: "Alternatives/move",
+            body: "Number of distinct move variations shown."
+        )
+    ]
+    private static let analysisLinesHelpItems: [HelpItem] = [
+        HelpItem(
+            id: "lines",
+            title: "Lines",
+            body: "How many best lines to request from the engine."
+        ),
+        HelpItem(
+            id: "display-plies",
+            title: "Display plies",
+            body: "How many arrows to draw for each line."
+        )
+    ]
+    private static let botHelpItems: [HelpItem] = [
+        HelpItem(
+            id: "strength",
+            title: "Strength",
+            body: "Limits engine strength for bot play. Higher is stronger."
+        ),
+        HelpItem(
+            id: "randomness",
+            title: "Randomness",
+            body: "Introduces strength randomness for the bot move. 1 - no randomness, 5 - high randomness."
+        ),
+        HelpItem(
+            id: "keep-playing",
+            title: "Keep playing",
+            body: "Auto-respond with a bot move after you play."
+        )
+    ]
     private var displayedEngineLines: [EngineLine] {
         viewModel.interactionMode == .analyzeLines ? viewModel.engineLines : []
     }
@@ -275,32 +355,38 @@ struct ContentView: View {
     }
 
     private var engineParametersBox: some View {
-        GroupBox("Engine Parameters") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 analysisControls
             }
+        } label: {
+            groupBoxHeader("Engine Parameters", items: Self.engineHelpItems)
         }
     }
 
     private var analysisVariationsBox: some View {
-        GroupBox("Analysis Parameters") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 treeBranchControl
             }
+        } label: {
+            groupBoxHeader("Analysis Parameters", items: Self.analysisVariationsHelpItems)
         }
     }
 
     private var analysisLinesBox: some View {
-        GroupBox("Analysis Parameters") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 linesControl
                 arrowCountControl
             }
+        } label: {
+            groupBoxHeader("Analysis Parameters", items: Self.analysisLinesHelpItems)
         }
     }
 
     private var botParametersBox: some View {
-        GroupBox("Bot Parameters") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 strengthControl
                 randomnessControl
@@ -308,6 +394,8 @@ struct ContentView: View {
                     .toggleStyle(.switch)
                     .disabled(viewModel.interactionMode != .playAgainstComputer)
             }
+        } label: {
+            groupBoxHeader("Bot Parameters", items: Self.botHelpItems)
         }
     }
 
@@ -350,34 +438,45 @@ struct ContentView: View {
         }
     }
 
+    private func groupBoxHeader(_ title: String, items: [HelpItem]) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            HoverHelpIcon(items: items)
+        }
+    }
+
     private var boardBox: some View {
-        GroupBox("Board") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button("Open Image…", action: viewModel.openImageFromPanel)
-                    Button("Rotate Position", action: viewModel.rotatePosition)
-                    Spacer()
-                    Toggle("Flip Board", isOn: flipBoardBinding.animation(.easeInOut(duration: 0.15)))
-                        .toggleStyle(.switch)
-                }
                 HStack {
                     nextMoveControl
+                    Toggle("Flip Board", isOn: flipBoardBinding.animation(.easeInOut(duration: 0.15)))
+                        .toggleStyle(.switch)
+                    Button(action: viewModel.rotatePosition) {
+                        Label("Rotate", systemImage: "rotate.right")
+                            .labelStyle(.iconOnly)
+                    }
+                    .help("Rotate Position")
                     Spacer()
-                    Button("Reset Board", action: viewModel.resetBoard)
-                    Button("Undo Move", action: viewModel.undo)
+                }
+                HStack(spacing: 8) {
+                    Button("Open Image…", action: viewModel.openImageFromPanel)
+                    Button("Reset", action: viewModel.resetBoard)
+                    Button("Undo", action: viewModel.undo)
                         .disabled(!viewModel.canUndo)
-                    Button("Redo Move", action: viewModel.redo)
+                    Button("Redo", action: viewModel.redo)
                         .disabled(!viewModel.canRedo)
+                    Spacer()
                 }
             }
+        } label: {
+            groupBoxHeader("Board", items: Self.boardHelpItems)
         }
     }
 
     private var nextMoveControl: some View {
         HStack(spacing: 6) {
             Text("Next move")
-                .font(.caption)
-                .foregroundColor(.secondary)
                 .fixedSize()
                 .lineLimit(1)
             Picker("Next move", selection: $nextMoveSelection) {
@@ -1514,6 +1613,62 @@ private func scoreText(_ score: EngineScore) -> String {
         return String(format: "%+.2f", val)
     case .mate(let m):
         return "M\(m)"
+    }
+}
+
+private struct HelpItem: Identifiable {
+    let id: String
+    let title: String
+    let body: String
+}
+
+private struct HoverHelpIcon: View {
+    let items: [HelpItem]
+    @State private var isPresented = false
+    @State private var hoverTask: DispatchWorkItem?
+
+    var body: some View {
+        Image(systemName: "questionmark.circle")
+            .font(.system(size: 12))
+            .foregroundColor(.secondary)
+            .onHover { hovering in
+                hoverTask?.cancel()
+                if hovering {
+                    let task = DispatchWorkItem { isPresented = true }
+                    hoverTask = task
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
+                } else {
+                    isPresented = false
+                }
+            }
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                HelpPopoverContent(items: items)
+            }
+            .onDisappear {
+                hoverTask?.cancel()
+                isPresented = false
+            }
+    }
+}
+
+private struct HelpPopoverContent: View {
+    let items: [HelpItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(item.body)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 280, alignment: .leading)
     }
 }
 
