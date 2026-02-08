@@ -136,9 +136,10 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
                     stopSent = true
                 }
             } else if line.hasPrefix("bestmove ") {
-                if !requireFullDepth || hasAllLinesAtDepth() {
-                    break
-                }
+                // `bestmove` means the current search is finished; accept best available lines.
+                // In strict-depth mode this prevents waiting forever when fewer legal moves than
+                // requested MultiPV are available.
+                break
             }
         }
 

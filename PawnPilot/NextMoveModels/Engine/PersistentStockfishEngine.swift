@@ -105,9 +105,9 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
                     stopSent = true
                 }
                 if line.hasPrefix("bestmove ") {
-                    if !requireFullDepth || hasAllLinesAtDepth() {
-                        break
-                    }
+                    // `bestmove` marks end of this search; return best available lines even when
+                    // strict depth could not fill every requested MultiPV slot.
+                    break
                 }
             }
 
