@@ -93,3 +93,13 @@
 "Limits engine strength for bot play. Higher is stronger." = "Limita a força da engine para o bot. Quanto maior, mais forte.";
 "Introduces strength randomness for the bot move. 1 - no randomness, 5 - high randomness." = "Introduz aleatoriedade na jogada do bot. 1 = sem aleatoriedade, 5 = alta aleatoriedade.";
 "Auto-respond with a bot move after you play." = "Responde automaticamente com um lance do bot após você jogar.";
+
+/* Piece editor */
+"Unknown piece code \"%@\". Use codes like wk, bn, or empty." = "Código de peça desconhecido \"%@\". Use códigos como wk, bn ou empty.";
+"No piece change on %@." = "Nenhuma alteração de peça em %@.";
+"Set %@ to %@." = "%@ definido como %@.";
+"Cleared %@." = "%@ esvaziado.";
+"Apply" = "Aplicar";
+"Cancel" = "Cancelar";
+"Edit %@" = "Editar %@";
+"wk, bn, empty" = "wk, bn, empty";

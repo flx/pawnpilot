@@ -2,8 +2,9 @@ import SwiftUI
 import AppKit
 import Combine
 import UniformTypeIdentifiers
-//import NextMoveKit
-//import FENDetectorKit
+import os
+
+private let log = Logger(subsystem: "com.digitalhandstand.PawnPilot", category: "AppViewModel")
 
 enum InteractionMode {
     case analyzeLines
@@ -25,7 +26,7 @@ struct TreeMoveNode: Identifiable {
     let uci: String
     let score: EngineScore
     let depth: Int
-    let scorePerspective: String
+    let scorePerspective: PieceColor
     let isUserMove: Bool
 
     init(
@@ -36,7 +37,7 @@ struct TreeMoveNode: Identifiable {
         uci: String,
         score: EngineScore,
         depth: Int,
-        scorePerspective: String,
+        scorePerspective: PieceColor,
         isUserMove: Bool
     ) {
         self.id = id
@@ -57,9 +58,7 @@ struct TreeMoveNode: Identifiable {
 
 @MainActor
 final class AppViewModel: ObservableObject {
-    @Published var boardState = BoardState() {
-        didSet { recomputeThreatMap() }
-    }
+    @Published var boardState = BoardState()
     @Published var detectionStatus: DetectionStatus = .idle
     @Published var engineLines: [EngineLine] = []
     @Published var statusMessage: String?
@@ -85,9 +84,6 @@ final class AppViewModel: ObservableObject {
     @Published var isTreeAnalyzing = false
     @Published var canUndo = false
     @Published var canRedo = false
-    @Published var showThreatOverlay = false
-    @Published var threatMapWhite: [BoardSquare: Int] = [:]
-    @Published var threatMapBlack: [BoardSquare: Int] = [:]
 
     private let pipeline = DetectorPipeline()
     private let engine: StockfishEngine
@@ -101,8 +97,9 @@ final class AppViewModel: ObservableObject {
     private let maxRecents = 3
     private var analysisToken = UUID()
     private var treeToken = UUID()
+    private var detectionToken = UUID()
+    private var treeAnimationToken = UUID()
     private var treeRootState: BoardState?
-    var treeRootActiveColor: String?
     private var treeExpandedPaths: Set<String> = []
     private var treeExpandingPaths: Set<String> = []
     private var treeExpansionTask: Task<Void, Never>?
@@ -116,7 +113,6 @@ final class AppViewModel: ObservableObject {
         if engineURL == nil {
             Self.reportMissingEngine(in: bundle)
         }
-        recomputeThreatMap()
     }
 
     func loadImage(from url: URL) {
@@ -159,6 +155,8 @@ final class AppViewModel: ObservableObject {
 
     func detect(cgImage: CGImage) {
         invalidateAnalysis()
+        let token = UUID()
+        detectionToken = token
         engineLines = []
         selectedEngineLineID = nil
         treeNodes = []
@@ -167,6 +165,7 @@ final class AppViewModel: ObservableObject {
         statusMessage = String(localized: "Detecting board...")
         Task {
             let output = await pipeline.process(cgImage: cgImage)
+            guard token == self.detectionToken else { return }
             var state = BoardState(fromDetection: output)
             if output.suggestedFlipForFEN {
                 state = state.rotated180()
@@ -175,7 +174,6 @@ final class AppViewModel: ObservableObject {
             // Orient the UI to match the screenshot (white at top when flip is suggested).
             self.orientationWhiteAtBottom = !output.suggestedFlipForFEN
             self.detectionStatus = .succeeded(output)
-            self.statusMessage = String(localized: "Detected position.")
             self.logWarnings(output.warnings)
             self.engineLines = []
             self.selectedEngineLineID = nil
@@ -184,12 +182,25 @@ final class AppViewModel: ObservableObject {
             self.lastMove = nil
             self.legalDestinations = []
             self.resetHistory()
-            _ = self.updateStatusForGameOver()
+            if let validationMessage = self.analysisValidationMessage(for: state) {
+                self.statusMessage = validationMessage
+            } else {
+                self.statusMessage = String(localized: "Detected position.")
+                _ = self.updateStatusForGameOver()
+            }
         }
     }
 
     func analyze() {
         if isAnalyzing { return }
+        if let validationMessage = analysisValidationMessage(for: boardState) {
+            statusMessage = validationMessage
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            return
+        }
         if let gameOver = gameOverMessage(for: boardState) {
             statusMessage = gameOver
             engineLines = []
@@ -209,8 +220,6 @@ final class AppViewModel: ObservableObject {
         treeExpandedPaths.removeAll()
         treeExpandingPaths.removeAll()
         treeRootState = nil
-        treeRootActiveColor = nil
-        treeSelectionSnapshot = nil
         let token = UUID()
         analysisToken = token
         isAnalyzing = true
@@ -237,6 +246,14 @@ final class AppViewModel: ObservableObject {
 
     func analyzeMoveTree() {
         if isTreeAnalyzing { return }
+        if let validationMessage = analysisValidationMessage(for: boardState) {
+            statusMessage = validationMessage
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            return
+        }
         if let gameOver = gameOverMessage(for: boardState) {
             statusMessage = gameOver
             engineLines = []
@@ -256,7 +273,6 @@ final class AppViewModel: ObservableObject {
         treeExpandingPaths.removeAll()
         treeExpansionTask?.cancel()
         treeRootState = boardState
-        treeRootActiveColor = boardState.activeColor
         statusMessage = String(localized: "Analyzing move tree...")
         treeNodes = []
         let token = UUID()
@@ -280,6 +296,7 @@ final class AppViewModel: ObservableObject {
 
     func selectTreeNode(_ id: TreeMoveNode.ID?) {
         if id == nil {
+            treeAnimationToken = UUID()
             selectedTreeNodeID = nil
             if let snapshot = treeSelectionSnapshot {
                 boardState = snapshot.state
@@ -310,16 +327,19 @@ final class AppViewModel: ObservableObject {
         }
 
         let map = treeNodeMap()
+        let animationToken = UUID()
+        treeAnimationToken = animationToken
         Task {
             if shouldAnimateIncrementally, let previousPath {
                 let succeeded = await animateTreeSelectionIncremental(
                     previousPath: previousPath,
                     newPath: newPath,
-                    nodeMap: map
+                    nodeMap: map,
+                    token: animationToken
                 )
                 if succeeded { return }
             }
-            await animateTreeSelection(path: newPath, rootState: rootState, nodeMap: map)
+            await animateTreeSelection(path: newPath, rootState: rootState, nodeMap: map, token: animationToken)
         }
         selectedTreeNodeID = id
         Task { await expandTreeForSelection(id: id) }
@@ -327,6 +347,15 @@ final class AppViewModel: ObservableObject {
 
     func engineMove() {
         if isEngineThinking { return }
+        if let validationMessage = analysisValidationMessage(for: boardState) {
+            statusMessage = validationMessage
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            legalDestinations = []
+            return
+        }
         if let gameOver = gameOverMessage(for: boardState) {
             statusMessage = gameOver
             engineLines = []
@@ -388,10 +417,12 @@ final class AppViewModel: ObservableObject {
         let movesToPlay = Array(line.moves.prefix(maxArrowsPerLine))
         Task {
             for uci in movesToPlay {
+                guard interactionMode == .analyzeLines else { return }
                 guard let move = boardState.move(fromUCI: uci) else { continue }
                 await performAnimatedMove(move: move)
-                await MainActor.run { engineLines = [] }
+                engineLines = []
             }
+            guard interactionMode == .analyzeLines else { return }
             analyze()
         }
     }
@@ -405,15 +436,13 @@ final class AppViewModel: ObservableObject {
         invalidateAnalysis()
         Task {
             await performAnimatedMove(move: move)
-            await MainActor.run {
-                engineLines = []
-                selectedEngineLineID = nil
-                treeNodes = []
-                selectedTreeNodeID = nil
-                legalDestinations = []
-                if keepPlaying, interactionMode == .playAgainstComputer, !isEngineThinking {
-                    engineMove()
-                }
+            engineLines = []
+            selectedEngineLineID = nil
+            treeNodes = []
+            selectedTreeNodeID = nil
+            legalDestinations = []
+            if keepPlaying, interactionMode == .playAgainstComputer, !isEngineThinking {
+                engineMove()
             }
         }
     }
@@ -426,11 +455,10 @@ final class AppViewModel: ObservableObject {
         legalDestinations = moveGenerator.legalDestinations(from: square, in: boardState)
     }
 
-    func setSideToMove(_ color: String) {
-        let normalized = color == "b" ? "b" : "w"
-        guard boardState.activeColor != normalized else { return }
+    func setSideToMove(_ color: PieceColor) {
+        guard boardState.sideToMove != color else { return }
         invalidateAnalysis()
-        boardState.activeColor = normalized
+        boardState.sideToMove = color
         engineLines = []
         selectedEngineLineID = nil
         treeNodes = []
@@ -465,24 +493,96 @@ final class AppViewModel: ObservableObject {
         statusMessage = String(localized: "Position rotated 180°.")
     }
 
+    func pieceCode(at square: BoardSquare) -> String {
+        guard let piece = boardState.piece(at: square) else { return "" }
+        return Self.pieceCode(for: piece)
+    }
+
+    @discardableResult
+    func setPiece(at square: BoardSquare, code rawCode: String) -> String? {
+        let normalizedCode = rawCode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        let replacement: Piece?
+        if normalizedCode.isEmpty || normalizedCode == "--" || normalizedCode == "empty" {
+            replacement = nil
+        } else if let parsedPiece = Self.piece(forCode: normalizedCode) {
+            replacement = parsedPiece
+        } else {
+            let errorMessage = String.localizedStringWithFormat(
+                NSLocalizedString(
+                    "Unknown piece code \"%@\". Use codes like wk, bn, or empty.",
+                    comment: "Validation error for invalid piece code input"
+                ),
+                rawCode
+            )
+            statusMessage = errorMessage
+            return errorMessage
+        }
+
+        let currentPiece = boardState.board[square.file, square.rank]
+        guard currentPiece != replacement else {
+            statusMessage = String.localizedStringWithFormat(
+                NSLocalizedString("No piece change on %@.", comment: "Status when edited square keeps same piece"),
+                square.label
+            )
+            return nil
+        }
+
+        pushSnapshot()
+        invalidateAnalysis()
+
+        var nextState = boardState
+        nextState.board[square.file, square.rank] = replacement
+        // A manual edit can move/remove a king or rook, or invalidate a stored en-passant target;
+        // reconcile the metadata so the stored state stays consistent (not just the emitted FEN).
+        nextState.castling = BoardState.sanitizedCastling(nextState.castling, board: nextState.board)
+        nextState.enPassant = BoardState.sanitizedEnPassant(nextState.enPassant, board: nextState.board, activeColor: nextState.activeColor)
+        boardState = nextState
+
+        lastMove = nil
+        legalDestinations = []
+        engineLines = []
+        selectedEngineLineID = nil
+        treeNodes = []
+        selectedTreeNodeID = nil
+
+        if let validationMessage = analysisValidationMessage(for: nextState) {
+            statusMessage = validationMessage
+        } else if let gameOverMessage = gameOverMessage(for: nextState) {
+            statusMessage = gameOverMessage
+        } else if let replacement {
+            statusMessage = String.localizedStringWithFormat(
+                NSLocalizedString("Set %@ to %@.", comment: "Status after setting a piece on a square"),
+                square.label,
+                Self.pieceCode(for: replacement)
+            )
+        } else {
+            statusMessage = String.localizedStringWithFormat(
+                NSLocalizedString("Cleared %@.", comment: "Status after clearing a square"),
+                square.label
+            )
+        }
+
+        return nil
+    }
+
+    // Already @MainActor-isolated, so direct mutation across the await is safe — no MainActor.run hops.
     private func performAnimatedMove(move: ChessMove) async {
         guard moveValidator.isLegal(move: move, in: boardState) else {
-            await MainActor.run { statusMessage = String(localized: "Illegal move.") }
+            statusMessage = String(localized: "Illegal move.")
             return
         }
         guard let piece = boardState.piece(at: move.from) else { return }
         pushSnapshot()
-        await MainActor.run {
-            animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
-        }
+        animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
         try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
-        await MainActor.run {
-            boardState.apply(move: move)
-            lastMove = move
-            animatingPiece = nil
-        }
+        boardState.apply(move: move)
+        lastMove = move
+        animatingPiece = nil
         updateUndoRedoState()
-        await MainActor.run { _ = updateStatusForGameOver() }
+        _ = updateStatusForGameOver()
     }
 
     func undo() {
@@ -568,6 +668,11 @@ final class AppViewModel: ObservableObject {
     private func invalidateAnalysis() {
         analysisToken = UUID()
         treeToken = UUID()
+        detectionToken = UUID()
+        treeAnimationToken = UUID()
+        // Bumping detectionToken abandons any in-flight detection (its completion guard now fails),
+        // so don't leave the status stuck on "Detecting…". A new detect() re-sets it to .running.
+        if case .running = detectionStatus { detectionStatus = .idle }
         isAnalyzing = false
         isTreeAnalyzing = false
         treeExpansionTask?.cancel()
@@ -576,7 +681,6 @@ final class AppViewModel: ObservableObject {
         treeExpandingPaths.removeAll()
         treeRootState = nil
         treeSelectionSnapshot = nil
-        treeRootActiveColor = nil
     }
 
     var gameOverScoreText: String? {
@@ -603,111 +707,40 @@ final class AppViewModel: ObservableObject {
         return false
     }
 
-    private func recomputeThreatMap() {
-        let (white, black) = threatCounts(for: boardState)
-        threatMapWhite = white
-        threatMapBlack = black
+    private func analysisValidationMessage(for state: BoardState) -> String? {
+        let whiteKingCount = pieceCount(.whiteKing, in: state.board)
+        let blackKingCount = pieceCount(.blackKing, in: state.board)
+        guard whiteKingCount == 1, blackKingCount == 1 else {
+            return String.localizedStringWithFormat(
+                NSLocalizedString(
+                    "Invalid board for analysis: expected 1 white king and 1 black king, found %d and %d. Please correct the detected pieces and try again.",
+                    comment: "Validation message when detected board has wrong king counts"
+                ),
+                whiteKingCount,
+                blackKingCount
+            )
+        }
+        return nil
     }
 
-    private func threatCounts(for state: BoardState) -> (white: [BoardSquare: Int], black: [BoardSquare: Int]) {
-        var white: [BoardSquare: Int] = [:]
-        var black: [BoardSquare: Int] = [:]
-
+    private func pieceCount(_ target: Piece, in board: Board) -> Int {
+        var count = 0
         for rank in 0..<8 {
-            for file in 0..<8 {
-                let square = BoardSquare(file: file, rank: rank)
-                guard let piece = state.board[file, rank] else { continue }
-                let attacks = attackedSquares(for: piece, at: square, board: state.board)
-                if piece.isWhite {
-                    for target in attacks {
-                        white[target, default: 0] += 1
-                    }
-                } else {
-                    for target in attacks {
-                        black[target, default: 0] += 1
-                    }
-                }
+            for file in 0..<8 where board[file, rank] == target {
+                count += 1
             }
         }
-        return (white, black)
-    }
-
-    private func attackedSquares(for piece: Piece, at square: BoardSquare, board: Board) -> [BoardSquare] {
-        func inBounds(_ file: Int, _ rank: Int) -> Bool {
-            (0..<8).contains(file) && (0..<8).contains(rank)
-        }
-
-        var results: [BoardSquare] = []
-        let f = square.file
-        let r = square.rank
-
-        switch piece {
-        case .whitePawn:
-            let targets = [(f - 1, r + 1), (f + 1, r + 1)]
-            for (tf, tr) in targets where inBounds(tf, tr) {
-                results.append(BoardSquare(file: tf, rank: tr))
-            }
-        case .blackPawn:
-            let targets = [(f - 1, r - 1), (f + 1, r - 1)]
-            for (tf, tr) in targets where inBounds(tf, tr) {
-                results.append(BoardSquare(file: tf, rank: tr))
-            }
-        case .whiteKnight, .blackKnight:
-            let offsets = [(1,2),(2,1),(-1,2),(-2,1),(1,-2),(2,-1),(-1,-2),(-2,-1)]
-            for (dx, dy) in offsets {
-                let tf = f + dx
-                let tr = r + dy
-                if inBounds(tf, tr) {
-                    results.append(BoardSquare(file: tf, rank: tr))
-                }
-            }
-        case .whiteBishop, .blackBishop:
-            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,1), (-1,1), (1,-1), (-1,-1)], board: board))
-        case .whiteRook, .blackRook:
-            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,0), (-1,0), (0,1), (0,-1)], board: board))
-        case .whiteQueen, .blackQueen:
-            results.append(contentsOf: slidingAttacks(from: square, directions: [(1,0), (-1,0), (0,1), (0,-1), (1,1), (-1,1), (1,-1), (-1,-1)], board: board))
-        case .whiteKing, .blackKing:
-            for dx in -1...1 {
-                for dy in -1...1 where !(dx == 0 && dy == 0) {
-                    let tf = f + dx
-                    let tr = r + dy
-                    if inBounds(tf, tr) {
-                        results.append(BoardSquare(file: tf, rank: tr))
-                    }
-                }
-            }
-        }
-
-        return results
-    }
-
-    private func slidingAttacks(from square: BoardSquare, directions: [(Int, Int)], board: Board) -> [BoardSquare] {
-        var results: [BoardSquare] = []
-        for (dx, dy) in directions {
-            var file = square.file + dx
-            var rank = square.rank + dy
-            while (0..<8).contains(file) && (0..<8).contains(rank) {
-                let target = BoardSquare(file: file, rank: rank)
-                results.append(target)
-                if board[file, rank] != nil {
-                    break
-                }
-                file += dx
-                rank += dy
-            }
-        }
-        return results
+        return count
     }
 
     private func analysisOptions(multiPV: Int, hash: Int = 128) -> EngineOptions {
+        // Analysis runs at full engine strength; `strength`/`elo` are left at their defaults
+        // because `limitStrength: false` makes them inert here (only Play Bot limits strength).
         EngineOptions(
             multiPV: max(multiPV, 1),
             movetimeMs: nil,
             depth: max(1, searchDepth),
-            strength: 5,
             limitStrength: false,
-            elo: elo(for: 5),
             hash: hash,
             threads: max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
         )
@@ -787,7 +820,7 @@ final class AppViewModel: ObservableObject {
                 basePlyIndex: basePlyIndex,
                 pliesToExpand: pliesToExpand,
                 branchCount: branchCount,
-                scorePerspective: state.activeColor
+                scorePerspective: state.sideToMove
             )
             mergeTreeNodes(newNodes)
             treeExpandedPaths.insert(baseKey)
@@ -817,37 +850,17 @@ final class AppViewModel: ObservableObject {
         basePlyIndex: Int,
         pliesToExpand: Int,
         branchCount: Int,
-        scorePerspective: String
+        scorePerspective: PieceColor
     ) -> [TreeMoveNode] {
         guard pliesToExpand > 0 else { return [] }
-        var nodeMap = treeNodeMap()
-        var newNodes: [TreeMoveNode] = []
-        let parentID = basePath.isEmpty ? nil : nodeMap[pathKey(basePath)]?.id
-        var seenFirstMoves: Set<String> = []
-
-        for (index, line) in lines.enumerated() {
-            guard let firstMove = line.moves.first else { continue }
-            guard seenFirstMoves.insert(firstMove).inserted else { continue }
-            let firstPath = basePath + [index]
-            let firstKey = pathKey(firstPath)
-            if nodeMap[firstKey] == nil {
-                let node = TreeMoveNode(
-                    parentID: parentID,
-                    plyIndex: basePlyIndex + 1,
-                    choicePath: firstPath,
-                    uci: firstMove,
-                    score: line.score,
-                    depth: line.depth,
-                    scorePerspective: scorePerspective,
-                    isUserMove: (basePlyIndex + 1).isMultiple(of: 2)
-                )
-                nodeMap[firstKey] = node
-                newNodes.append(node)
-            }
-            if seenFirstMoves.count >= branchCount { break }
-        }
-
-        return newNodes
+        return MoveTreeLogic.buildChunkNodes(
+            lines: lines,
+            basePath: basePath,
+            basePlyIndex: basePlyIndex,
+            branchCount: branchCount,
+            scorePerspective: scorePerspective,
+            existing: treeNodeMap()
+        )
     }
 
     private func mergeTreeNodes(_ newNodes: [TreeMoveNode]) {
@@ -863,11 +876,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func treeNodeMap() -> [String: TreeMoveNode] {
-        var map: [String: TreeMoveNode] = [:]
-        for node in treeNodes {
-            map[pathKey(node.choicePath)] = node
-        }
-        return map
+        MoveTreeLogic.nodeMap(from: treeNodes)
     }
 
     private func treeState(
@@ -875,28 +884,16 @@ final class AppViewModel: ObservableObject {
         rootState: BoardState,
         nodeMap: [String: TreeMoveNode]
     ) -> (state: BoardState, lastMove: ChessMove?)? {
-        var state = rootState
-        var lastMove: ChessMove?
-        var currentPath: [Int] = []
-        for index in path {
-            currentPath.append(index)
-            guard
-                let node = nodeMap[pathKey(currentPath)],
-                let move = state.move(fromUCI: node.uci)
-            else {
-                return nil
-            }
-            state.apply(move: move)
-            lastMove = move
-        }
-        return (state, lastMove)
+        MoveTreeLogic.state(forPath: path, rootState: rootState, nodeMap: nodeMap)
     }
 
     private func animateTreeSelection(
         path: [Int],
         rootState: BoardState,
-        nodeMap: [String: TreeMoveNode]
+        nodeMap: [String: TreeMoveNode],
+        token: UUID
     ) async {
+        guard token == treeAnimationToken else { return }
         guard !path.isEmpty else {
             boardState = rootState
             lastMove = nil
@@ -928,9 +925,11 @@ final class AppViewModel: ObservableObject {
         animatingPiece = nil
 
         for move in moves {
+            guard token == treeAnimationToken else { return }
             guard let piece = boardState.piece(at: move.from) else { continue }
             animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
             try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
+            guard token == treeAnimationToken else { animatingPiece = nil; return }
             boardState.apply(move: move)
             lastMove = move
             animatingPiece = nil
@@ -940,8 +939,10 @@ final class AppViewModel: ObservableObject {
     private func animateTreeSelectionIncremental(
         previousPath: [Int],
         newPath: [Int],
-        nodeMap: [String: TreeMoveNode]
+        nodeMap: [String: TreeMoveNode],
+        token: UUID
     ) async -> Bool {
+        guard token == treeAnimationToken else { return false }
         guard newPath.count == previousPath.count + 1, pathHasPrefix(newPath, previousPath) else { return false }
         guard let node = nodeMap[pathKey(newPath)], let move = boardState.move(fromUCI: node.uci) else { return false }
         guard let piece = boardState.piece(at: move.from) else { return false }
@@ -949,6 +950,7 @@ final class AppViewModel: ObservableObject {
         legalDestinations = []
         animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
         try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
+        guard token == treeAnimationToken else { animatingPiece = nil; return true }
         boardState.apply(move: move)
         lastMove = move
         animatingPiece = nil
@@ -958,7 +960,7 @@ final class AppViewModel: ObservableObject {
     private func logWarnings(_ warnings: [DetectionWarning]) {
         guard !warnings.isEmpty else { return }
         for warning in warnings {
-            print("Detection warning: \(warning.message)")
+            log.warning("Detection warning: \(warning.message, privacy: .public)")
         }
     }
 
@@ -1002,9 +1004,44 @@ final class AppViewModel: ObservableObject {
         return nil
     }
 
+    private static func piece(forCode code: String) -> Piece? {
+        switch code {
+        case "wk": return .whiteKing
+        case "wq": return .whiteQueen
+        case "wr": return .whiteRook
+        case "wb": return .whiteBishop
+        case "wn": return .whiteKnight
+        case "wp": return .whitePawn
+        case "bk": return .blackKing
+        case "bq": return .blackQueen
+        case "br": return .blackRook
+        case "bb": return .blackBishop
+        case "bn": return .blackKnight
+        case "bp": return .blackPawn
+        default: return nil
+        }
+    }
+
+    private static func pieceCode(for piece: Piece) -> String {
+        switch piece {
+        case .whiteKing: return "wk"
+        case .whiteQueen: return "wq"
+        case .whiteRook: return "wr"
+        case .whiteBishop: return "wb"
+        case .whiteKnight: return "wn"
+        case .whitePawn: return "wp"
+        case .blackKing: return "bk"
+        case .blackQueen: return "bq"
+        case .blackRook: return "br"
+        case .blackBishop: return "bb"
+        case .blackKnight: return "bn"
+        case .blackPawn: return "bp"
+        }
+    }
+
     private static func reportMissingEngine(in bundle: Bundle) {
         let exeDir = bundle.executableURL?.deletingLastPathComponent().path ?? "n/a"
-        print("Stockfish engine not found. Checked executable dir: \(exeDir)")
+        log.error("Stockfish engine not found. Checked executable dir: \(exeDir, privacy: .public)")
     }
 
     private struct BoardSnapshot {
@@ -1013,31 +1050,11 @@ final class AppViewModel: ObservableObject {
     }
 }
 
-private func compareChoicePath(_ lhs: [Int], _ rhs: [Int]) -> Bool {
-    for (l, r) in zip(lhs, rhs) {
-        if l != r { return l < r }
-    }
-    return lhs.count < rhs.count
-}
-
-private func pathHasPrefix(_ path: [Int], _ prefix: [Int]) -> Bool {
-    guard path.count >= prefix.count else { return false }
-    return Array(path.prefix(prefix.count)) == prefix
-}
-
-private func pathKey(_ path: [Int]) -> String {
-    path.map(String.init).joined(separator: ".")
-}
-
-private func countUniqueFirstMoves(in lines: [EngineLine]) -> Int {
-    var seen: Set<String> = []
-    for line in lines {
-        if let mv = line.moves.first {
-            seen.insert(mv)
-        }
-    }
-    return seen.count
-}
+// Thin forwarders to the pure logic in `MoveTreeLogic`, kept so the call sites above read cleanly.
+private func compareChoicePath(_ lhs: [Int], _ rhs: [Int]) -> Bool { MoveTreeLogic.compareChoicePath(lhs, rhs) }
+private func pathHasPrefix(_ path: [Int], _ prefix: [Int]) -> Bool { MoveTreeLogic.pathHasPrefix(path, prefix) }
+private func pathKey(_ path: [Int]) -> String { MoveTreeLogic.pathKey(path) }
+private func countUniqueFirstMoves(in lines: [EngineLine]) -> Int { MoveTreeLogic.countUniqueFirstMoves(in: lines) }
 
 struct AnimatedPiece: Identifiable {
     let id: UUID

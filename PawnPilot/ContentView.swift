@@ -2,8 +2,6 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import Combine
-//import NextMoveKit
-//import FENDetectorKit
 
 private enum PieceImages {
     private static var cache: [Piece: NSImage] = [:]
@@ -66,9 +64,12 @@ struct ContentView: View {
     }
     @State private var selectedSquare: BoardSquare?
     @State private var dropHighlight = false
-    @State private var nextMoveSelection: String
-    @State private var selectedTab: RightPanelTab
+    @State private var pieceEditorSquare: BoardSquare?
+    @State private var pieceEditorCode = ""
+    @State private var pieceEditorError: String?
+    @FocusState private var isPieceEditorFocused: Bool
     private let boardColumnWidth: CGFloat = 492
+    private let pieceEditorCardWidth: CGFloat = 192
     private static let tabViewTopInset: CGFloat = {
         let tabView = NSTabView(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
         tabView.tabViewType = .topTabsBezelBorder
@@ -202,8 +203,21 @@ struct ContentView: View {
 
     init(viewModel: AppViewModel) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
-        _nextMoveSelection = State(initialValue: viewModel.boardState.activeColor)
-        _selectedTab = State(initialValue: Self.tab(for: viewModel.interactionMode))
+    }
+
+    /// Single source of truth lives in the view model; these bindings project it for the controls.
+    private var nextMoveBinding: Binding<PieceColor> {
+        Binding(
+            get: { viewModel.boardState.sideToMove },
+            set: { viewModel.setSideToMove($0) }
+        )
+    }
+
+    private var selectedTabBinding: Binding<RightPanelTab> {
+        Binding(
+            get: { Self.tab(for: viewModel.interactionMode) },
+            set: { viewModel.interactionMode = Self.mode(for: $0) }
+        )
     }
 
     private var tabItems: [AppKitTabItem<RightPanelTab>] {
@@ -284,26 +298,33 @@ struct ContentView: View {
 
     private var boardColumn: some View {
         VStack(spacing: 8) {
-                BoardWithCoords(
-                    boardState: viewModel.boardState,
-                    orientationWhiteAtBottom: viewModel.orientationWhiteAtBottom,
-                    selected: $selectedSquare,
-                    lastMove: viewModel.lastMove,
-                    legalTargets: viewModel.legalDestinations,
-                    engineLines: displayedEngineLines,
-                    selectedEngineLineID: viewModel.selectedEngineLineID,
-                    treePaths: displayedTreePaths,
-                    treeMaxPlies: treeMaxPlies,
-                    maxSegments: viewModel.maxArrowsPerLine,
-                    dropHighlight: dropHighlight,
-                    animatingPiece: viewModel.animatingPiece,
-                    showThreatOverlay: viewModel.showThreatOverlay,
-                    threatMapWhite: viewModel.threatMapWhite,
-                    threatMapBlack: viewModel.threatMapBlack
-                ) { from, to in
-                    viewModel.applyUserMove(from: from, to: to)
-                    selectedSquare = nil
-                    viewModel.updateLegalMoves(for: selectedSquare)
+                ZStack(alignment: .topLeading) {
+                    BoardWithCoords(
+                        boardState: viewModel.boardState,
+                        orientationWhiteAtBottom: viewModel.orientationWhiteAtBottom,
+                        selected: $selectedSquare,
+                        lastMove: viewModel.lastMove,
+                        legalTargets: viewModel.legalDestinations,
+                        engineLines: displayedEngineLines,
+                        selectedEngineLineID: viewModel.selectedEngineLineID,
+                        treePaths: displayedTreePaths,
+                        treeMaxPlies: treeMaxPlies,
+                        maxSegments: viewModel.maxArrowsPerLine,
+                        dropHighlight: dropHighlight,
+                        animatingPiece: viewModel.animatingPiece,
+                        onEditSquare: { square in
+                            beginPieceEdit(at: square)
+                        }
+                    ) { from, to in
+                        viewModel.applyUserMove(from: from, to: to)
+                        selectedSquare = nil
+                        viewModel.updateLegalMoves(for: selectedSquare)
+                    }
+                    if let square = pieceEditorSquare {
+                        pieceEditorCard(square: square)
+                            .position(pieceEditorPosition(for: square))
+                            .zIndex(20)
+                    }
                 }
                 .onChange(of: selectedSquare) { newSelection in
                     viewModel.updateLegalMoves(for: newSelection)
@@ -313,8 +334,8 @@ struct ContentView: View {
                 }
                 scoreStrip(
                     lines: displayedEngineLines,
-                    bottomColor: viewModel.orientationWhiteAtBottom ? "w" : "b",
-                    perspectiveColor: viewModel.boardState.activeColor,
+                    bottomColor: viewModel.orientationWhiteAtBottom ? .white : .black,
+                    perspectiveColor: viewModel.boardState.sideToMove,
                     overrideScore: scoreOverrideText
                 )
         }
@@ -324,7 +345,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             Spacer().frame(height: max(0, BoardWithCoords.boardTopInset - Self.tabViewTopInset))
             AppKitTabView(
-                selection: $selectedTab,
+                selection: selectedTabBinding,
                 items: tabItems,
                 borderType: .line,
                 tabType: .topTabsBezelBorder
@@ -332,18 +353,6 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 320, maxWidth: .infinity, minHeight: rightPanelHeight, maxHeight: rightPanelHeight, alignment: .topLeading)
-        .onChange(of: selectedTab) { newValue in
-            let mode = Self.mode(for: newValue)
-            if viewModel.interactionMode != mode {
-                viewModel.interactionMode = mode
-            }
-        }
-        .onChange(of: viewModel.interactionMode) { newValue in
-            let tab = Self.tab(for: newValue)
-            if tab != selectedTab {
-                selectedTab = tab
-            }
-        }
     }
 
     private var analyzeVariationsPanel: some View {
@@ -514,9 +523,9 @@ struct ContentView: View {
             Text("Next move")
                 .fixedSize()
                 .lineLimit(1)
-            Picker("Next move", selection: $nextMoveSelection) {
-                Text("White").tag("w")
-                Text("Black").tag("b")
+            Picker("Next move", selection: nextMoveBinding) {
+                Text("White").tag(PieceColor.white)
+                Text("Black").tag(PieceColor.black)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -524,14 +533,6 @@ struct ContentView: View {
         }
         .frame(minWidth: 230, alignment: .leading)
         .layoutPriority(1)
-        .onChange(of: nextMoveSelection) { newValue in
-            viewModel.setSideToMove(newValue)
-        }
-        .onChange(of: viewModel.boardState.activeColor) { newValue in
-            if nextMoveSelection != newValue {
-                nextMoveSelection = newValue
-            }
-        }
     }
 
     private var strengthControl: some View {
@@ -598,7 +599,7 @@ struct ContentView: View {
         let nodeMap = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         let targetNode = treeScoreNode(nodes: nodes, selectedID: selectedID)
         guard let targetNode, let resolvedNode = nodeMap[targetNode.id] else { return nil }
-        let bottomColor = viewModel.orientationWhiteAtBottom ? "w" : "b"
+        let bottomColor: PieceColor = viewModel.orientationWhiteAtBottom ? .white : .black
         return scoreTextForBottomPerspective(
             score: resolvedNode.score,
             bottomColor: bottomColor,
@@ -734,7 +735,7 @@ struct ContentView: View {
                                     nodes: viewModel.treeNodes,
                                     selectedID: viewModel.selectedTreeNodeID,
                                     basePath: currentTreeBasePath,
-                                    bottomColor: viewModel.orientationWhiteAtBottom ? "w" : "b",
+                                    bottomColor: viewModel.orientationWhiteAtBottom ? .white : .black,
                                     lineColor: treeLineColor,
                                     onSelect: { viewModel.selectTreeNode($0) }
                                 )
@@ -784,6 +785,96 @@ struct ContentView: View {
         }
         .padding(.top, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func beginPieceEdit(at square: BoardSquare) {
+        pieceEditorSquare = square
+        pieceEditorCode = viewModel.pieceCode(at: square)
+        pieceEditorError = nil
+        selectedSquare = nil
+        viewModel.updateLegalMoves(for: nil)
+        DispatchQueue.main.async {
+            isPieceEditorFocused = true
+        }
+    }
+
+    private func closePieceEditor() {
+        pieceEditorSquare = nil
+        pieceEditorCode = ""
+        pieceEditorError = nil
+        isPieceEditorFocused = false
+    }
+
+    private func applyPieceEditor() {
+        guard let square = pieceEditorSquare else { return }
+        if let error = viewModel.setPiece(at: square, code: pieceEditorCode) {
+            pieceEditorError = error
+            isPieceEditorFocused = true
+        } else {
+            closePieceEditor()
+        }
+    }
+
+    private func pieceEditorCard(square: BoardSquare) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(String.localizedStringWithFormat(NSLocalizedString("Edit %@", comment: "Piece editor title"), square.label))
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextField(String(localized: "wk, bn, empty"), text: $pieceEditorCode)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+                .focused($isPieceEditorFocused)
+                .onSubmit(applyPieceEditor)
+            if let pieceEditorError {
+                Text(pieceEditorError)
+                    .font(.caption2)
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Button("Apply", action: applyPieceEditor)
+                    .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel, action: closePieceEditor)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+            }
+        }
+        .padding(8)
+        .frame(width: pieceEditorCardWidth)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 5, x: 0, y: 2)
+    }
+
+    private func pieceEditorPosition(for square: BoardSquare) -> CGPoint {
+        let files = viewModel.orientationWhiteAtBottom ? Array(0...7) : Array((0...7).reversed())
+        let ranks = viewModel.orientationWhiteAtBottom ? Array((0...7).reversed()) : Array(0...7)
+        guard
+            let col = files.firstIndex(of: square.file),
+            let rowFromTop = ranks.firstIndex(of: square.rank)
+        else {
+            return CGPoint(x: boardColumnWidth * 0.5, y: boardColumnWidth * 0.5)
+        }
+
+        let boardOriginX = BoardWithCoords.boardLeadingInset
+        let boardOriginY = BoardWithCoords.boardTopInset
+        let x = boardOriginX + (CGFloat(col) + 0.5) * BoardWithCoords.squareSize
+        let y = boardOriginY + (CGFloat(rowFromTop) + 0.5) * BoardWithCoords.squareSize
+
+        // Keep the floating card fully inside the board column. Heights approximate the card with
+        // and without the error row; the exact value only affects edge clamping.
+        let halfWidth = pieceEditorCardWidth / 2
+        let halfHeight: CGFloat = pieceEditorError == nil ? 48 : 60
+        let margin: CGFloat = 4
+        let clampedX = min(max(x, halfWidth + margin), boardColumnWidth - halfWidth - margin)
+        let clampedY = min(max(y, halfHeight + margin), boardColumnWidth - halfHeight - margin)
+        return CGPoint(x: clampedX, y: clampedY)
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -896,7 +987,7 @@ struct TreeNodesView: View {
     let nodes: [TreeMoveNode]
     let selectedID: TreeMoveNode.ID?
     let basePath: [Int]
-    let bottomColor: String
+    let bottomColor: PieceColor
     let lineColor: (Int) -> Color
     let onSelect: (TreeMoveNode.ID?) -> Void
     @State private var isActive = false
@@ -1155,9 +1246,6 @@ struct BoardGridView: View {
     @Binding var selected: BoardSquare?
     let lastMove: ChessMove?
     let legalTargets: [BoardSquare]
-    let showThreatOverlay: Bool
-    let threatMapWhite: [BoardSquare: Int]
-    let threatMapBlack: [BoardSquare: Int]
     let animatingPiece: AnimatedPiece?
     let onMove: (BoardSquare, BoardSquare) -> Void
 
@@ -1197,9 +1285,7 @@ struct BoardGridView: View {
         let darkColor = Color(.sRGB, red: 0.90, green: 0.90, blue: 0.90, opacity: 1.0)  // light gray
         let isLegalTarget = legalTargets.contains(square)
         let isHiddenByAnimation = animatingPiece?.from == square || animatingPiece?.to == square
-        let whiteThreats = threatMapWhite[square] ?? 0
-        let blackThreats = threatMapBlack[square] ?? 0
-        let baseColor = showThreatOverlay ? Color.white : (isLight ? lightColor : darkColor)
+        let baseColor = isLight ? lightColor : darkColor
 
         return Rectangle()
             .fill(baseColor)
@@ -1209,9 +1295,6 @@ struct BoardGridView: View {
             )
             .overlay(
                 ZStack {
-                    if showThreatOverlay {
-                        threatOverlays(white: whiteThreats, black: blackThreats)
-                    }
                     if isSelected {
                         Color.accentColor.opacity(0.25)
                     }
@@ -1270,27 +1353,6 @@ struct BoardGridView: View {
         }
     }
 
-    @ViewBuilder
-    private func threatOverlays(white: Int, black: Int) -> some View {
-        if white > 0 {
-            Rectangle()
-                .fill(Color.red.opacity(threatOpacity(white)))
-        }
-        if black > 0 {
-            Rectangle()
-                .fill(Color.blue.opacity(threatOpacity(black)))
-        }
-    }
-
-    private func threatOpacity(_ count: Int) -> Double {
-        switch count {
-        case 0: return 0
-        case 1: return 0.45
-        case 2: return 0.55
-        case 3: return 0.65
-        default: return 0.75
-        }
-    }
 }
 
 struct ArrowsOverlay: View {
@@ -1326,17 +1388,17 @@ struct ArrowsOverlay: View {
                     )
                 }
             }
-            let overlapPositions = overlapPositions(for: renderSegments)
+            let overlapPositions = BoardArrowGeometry.overlapPositions(for: renderSegments)
 
             ForEach(renderSegments) { render in
                 let segment = render.segment
-                let fromPoint = center(for: segment.from, files: files, ranks: ranks, square: squareSize)
-                let toPoint = center(for: segment.to, files: files, ranks: ranks, square: squareSize)
-                let offset = offset(for: render, from: fromPoint, to: toPoint, overlapPositions: overlapPositions)
+                let fromPoint = BoardArrowGeometry.center(for: segment.from, files: files, ranks: ranks, square: squareSize)
+                let toPoint = BoardArrowGeometry.center(for: segment.to, files: files, ranks: ranks, square: squareSize)
+                let offset = BoardArrowGeometry.offset(for: render, from: fromPoint, to: toPoint, overlapPositions: overlapPositions)
                 let startPoint = CGPoint(x: fromPoint.x + offset.x, y: fromPoint.y + offset.y)
                 let endPoint = CGPoint(x: toPoint.x + offset.x, y: toPoint.y + offset.y)
                 ArrowShape(start: startPoint, end: endPoint)
-                    .stroke(color(for: render.lineIndex).opacity(segment.opacity), style: StrokeStyle(lineWidth: segment.lineWidth, lineCap: .round))
+                    .stroke(BoardArrowGeometry.color(for: render.lineIndex).opacity(segment.opacity), style: StrokeStyle(lineWidth: segment.lineWidth, lineCap: .round))
                     .overlay(
                         Group {
                             if !segment.label.isEmpty {
@@ -1344,8 +1406,8 @@ struct ArrowsOverlay: View {
                                     .font(.system(size: 11, weight: .bold, design: .rounded))
                                     .foregroundColor(.white)
                                     .padding(4)
-                                    .background(Circle().fill(color(for: render.lineIndex)))
-                                    .position(midpoint(from: startPoint, to: endPoint))
+                                    .background(Circle().fill(BoardArrowGeometry.color(for: render.lineIndex)))
+                                    .position(BoardArrowGeometry.midpoint(from: startPoint, to: endPoint))
                             }
                         }
                     )
@@ -1376,80 +1438,6 @@ struct ArrowsOverlay: View {
             tempState.apply(move: move)
         }
         return segments
-    }
-
-    private func center(for square: BoardSquare, files: [Int], ranks: [Int], square squareSize: CGFloat) -> CGPoint {
-        guard let col = files.firstIndex(of: square.file), let row = ranks.firstIndex(of: square.rank) else {
-            return .zero
-        }
-        let x = (CGFloat(col) + 0.5) * squareSize
-        let y = (CGFloat(row) + 0.5) * squareSize
-        return CGPoint(x: x, y: y)
-    }
-
-    private func midpoint(from: CGPoint, to: CGPoint) -> CGPoint {
-        CGPoint(x: (from.x + to.x) * 0.5, y: (from.y + to.y) * 0.5)
-    }
-
-    private func overlapPositions(for segments: [RenderSegment]) -> [SegmentKey: OverlapPosition] {
-        var positions: [SegmentKey: OverlapPosition] = [:]
-        var groups: [OverlapKey: [RenderSegment]] = [:]
-
-        for render in segments {
-            if let key = overlapKey(for: render.segment) {
-                groups[key, default: []].append(render)
-            } else {
-                positions[render.key] = OverlapPosition(index: 0, count: 1)
-            }
-        }
-
-        for (_, group) in groups {
-            let sorted = group.sorted {
-                if $0.lineIndex != $1.lineIndex { return $0.lineIndex < $1.lineIndex }
-                return $0.segmentIndex < $1.segmentIndex
-            }
-            let count = sorted.count
-            for (idx, render) in sorted.enumerated() {
-                positions[render.key] = OverlapPosition(index: idx, count: count)
-            }
-        }
-
-        return positions
-    }
-
-    private func overlapKey(for segment: ArrowSegment) -> OverlapKey? {
-        let dx = segment.to.file - segment.from.file
-        let dy = segment.to.rank - segment.from.rank
-        guard dx != 0 || dy != 0 else { return nil }
-        let dirX = dx == 0 ? 0 : dx / abs(dx)
-        let dirY = dy == 0 ? 0 : dy / abs(dy)
-        return OverlapKey(from: segment.from, dirX: dirX, dirY: dirY)
-    }
-
-    private func offset(
-        for render: RenderSegment,
-        from: CGPoint,
-        to: CGPoint,
-        overlapPositions: [SegmentKey: OverlapPosition]
-    ) -> CGPoint {
-        guard let position = overlapPositions[render.key], position.count > 1 else {
-            return .zero
-        }
-        let dx = to.x - from.x
-        let dy = to.y - from.y
-        let length = sqrt(dx * dx + dy * dy)
-        guard length > 0 else { return .zero }
-        let offsetIndex = CGFloat(position.index) - CGFloat(position.count - 1) / 2.0
-        let baseSpacing: CGFloat = 12.0
-        let divisor = CGFloat(max(position.count, 2))
-        let spacing = baseSpacing * 2.0 / divisor
-        let unitX = -dy / length
-        let unitY = dx / length
-        return CGPoint(x: unitX * spacing * offsetIndex, y: unitY * spacing * offsetIndex)
-    }
-
-    private func color(for index: Int) -> Color {
-        treeBaseColor(index).opacity(0.8)
     }
 }
 
@@ -1494,24 +1482,24 @@ struct TreeArrowsOverlay: View {
                     )
                 }
             }
-            let overlapPositions = overlapPositions(for: renderSegments)
+            let overlapPositions = BoardArrowGeometry.overlapPositions(for: renderSegments)
 
             ForEach(renderSegments) { render in
                 let segment = render.segment
-                let fromPoint = center(for: segment.from, files: files, ranks: ranks, square: squareSize)
-                let toPoint = center(for: segment.to, files: files, ranks: ranks, square: squareSize)
-                let offset = offset(for: render, from: fromPoint, to: toPoint, overlapPositions: overlapPositions)
+                let fromPoint = BoardArrowGeometry.center(for: segment.from, files: files, ranks: ranks, square: squareSize)
+                let toPoint = BoardArrowGeometry.center(for: segment.to, files: files, ranks: ranks, square: squareSize)
+                let offset = BoardArrowGeometry.offset(for: render, from: fromPoint, to: toPoint, overlapPositions: overlapPositions)
                 let startPoint = CGPoint(x: fromPoint.x + offset.x, y: fromPoint.y + offset.y)
                 let endPoint = CGPoint(x: toPoint.x + offset.x, y: toPoint.y + offset.y)
                 ArrowShape(start: startPoint, end: endPoint)
-                    .stroke(color(for: render.lineIndex).opacity(segment.opacity), style: StrokeStyle(lineWidth: segment.lineWidth, lineCap: .round))
+                    .stroke(BoardArrowGeometry.color(for: render.lineIndex).opacity(segment.opacity), style: StrokeStyle(lineWidth: segment.lineWidth, lineCap: .round))
                     .overlay(
                         Text(segment.label)
                             .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
                             .padding(4)
-                            .background(Circle().fill(color(for: render.lineIndex)))
-                            .position(midpoint(from: startPoint, to: endPoint))
+                            .background(Circle().fill(BoardArrowGeometry.color(for: render.lineIndex)))
+                            .position(BoardArrowGeometry.midpoint(from: startPoint, to: endPoint))
                     )
             }
         }
@@ -1536,8 +1524,12 @@ struct TreeArrowsOverlay: View {
         }
         return segments
     }
+}
 
-    private func center(for square: BoardSquare, files: [Int], ranks: [Int], square squareSize: CGFloat) -> CGPoint {
+/// Shared geometry for the engine-line and tree arrow overlays. Both overlays map board squares
+/// to view coordinates and fan out parallel arrows identically; this keeps that math in one place.
+private enum BoardArrowGeometry {
+    static func center(for square: BoardSquare, files: [Int], ranks: [Int], square squareSize: CGFloat) -> CGPoint {
         guard let col = files.firstIndex(of: square.file), let row = ranks.firstIndex(of: square.rank) else {
             return .zero
         }
@@ -1546,11 +1538,11 @@ struct TreeArrowsOverlay: View {
         return CGPoint(x: x, y: y)
     }
 
-    private func midpoint(from: CGPoint, to: CGPoint) -> CGPoint {
+    static func midpoint(from: CGPoint, to: CGPoint) -> CGPoint {
         CGPoint(x: (from.x + to.x) * 0.5, y: (from.y + to.y) * 0.5)
     }
 
-    private func overlapPositions(for segments: [RenderSegment]) -> [SegmentKey: OverlapPosition] {
+    static func overlapPositions(for segments: [RenderSegment]) -> [SegmentKey: OverlapPosition] {
         var positions: [SegmentKey: OverlapPosition] = [:]
         var groups: [OverlapKey: [RenderSegment]] = [:]
 
@@ -1576,7 +1568,7 @@ struct TreeArrowsOverlay: View {
         return positions
     }
 
-    private func overlapKey(for segment: ArrowSegment) -> OverlapKey? {
+    static func overlapKey(for segment: ArrowSegment) -> OverlapKey? {
         let dx = segment.to.file - segment.from.file
         let dy = segment.to.rank - segment.from.rank
         guard dx != 0 || dy != 0 else { return nil }
@@ -1585,7 +1577,7 @@ struct TreeArrowsOverlay: View {
         return OverlapKey(from: segment.from, dirX: dirX, dirY: dirY)
     }
 
-    private func offset(
+    static func offset(
         for render: RenderSegment,
         from: CGPoint,
         to: CGPoint,
@@ -1607,7 +1599,7 @@ struct TreeArrowsOverlay: View {
         return CGPoint(x: unitX * spacing * offsetIndex, y: unitY * spacing * offsetIndex)
     }
 
-    private func color(for index: Int) -> Color {
+    static func color(for index: Int) -> Color {
         treeBaseColor(index).opacity(0.8)
     }
 }
@@ -1812,13 +1804,13 @@ private func bestScoreText(lines: [EngineLine]) -> String {
     return scoreText(first.score)
 }
 
-private func scoreStrip(lines: [EngineLine], bottomColor: String, perspectiveColor: String, overrideScore: String? = nil) -> some View {
+private func scoreStrip(lines: [EngineLine], bottomColor: PieceColor, perspectiveColor: PieceColor, overrideScore: String? = nil) -> some View {
     let displayScore = overrideScore ?? sideScoreText(
         lines: lines,
         bottomColor: bottomColor,
         perspectiveColor: perspectiveColor
     )
-    let label = bottomColor == "w"
+    let label = bottomColor == .white
         ? String(localized: "Score for white")
         : String(localized: "Score for black")
     return HStack {
@@ -1833,7 +1825,7 @@ private func scoreStrip(lines: [EngineLine], bottomColor: String, perspectiveCol
     }
 }
 
-private func sideScoreText(lines: [EngineLine], bottomColor: String, perspectiveColor: String) -> String {
+private func sideScoreText(lines: [EngineLine], bottomColor: PieceColor, perspectiveColor: PieceColor) -> String {
     guard let first = lines.first else { return "--" }
     return scoreTextForBottomPerspective(
         score: first.score,
@@ -1842,25 +1834,19 @@ private func sideScoreText(lines: [EngineLine], bottomColor: String, perspective
     )
 }
 
-private func scoreTextForBottomPerspective(score: EngineScore, bottomColor: String, perspectiveColor: String) -> String {
+private func scoreTextForBottomPerspective(score: EngineScore, bottomColor: PieceColor, perspectiveColor: PieceColor) -> String {
     let adjusted = adjustedScoreForBottom(score: score, bottomColor: bottomColor, perspectiveColor: perspectiveColor)
     return scoreText(adjusted)
 }
 
-private func adjustedScoreForBottom(score: EngineScore, bottomColor: String, perspectiveColor: String) -> EngineScore {
-    let normalizedBottom = normalizedColor(bottomColor)
-    let normalizedPerspective = normalizedColor(perspectiveColor)
-    let sameSide = normalizedBottom == normalizedPerspective
+private func adjustedScoreForBottom(score: EngineScore, bottomColor: PieceColor, perspectiveColor: PieceColor) -> EngineScore {
+    let sameSide = bottomColor == perspectiveColor
     switch score {
     case .cp(let v):
         return .cp(sameSide ? v : -v)
     case .mate(let m):
         return .mate(sameSide ? m : -m)
     }
-}
-
-private func normalizedColor(_ color: String) -> String {
-    color == "b" ? "b" : "w"
 }
 
 private struct KeyEventHandler: NSViewRepresentable {
@@ -1948,8 +1934,8 @@ struct AnimatingPieceOverlay: View {
                 let squareSize = min(geo.size.width, geo.size.height) / 8.0
                 let files = orientationWhiteAtBottom ? Array(0...7) : Array((0...7).reversed())
                 let ranks = orientationWhiteAtBottom ? Array((0...7).reversed()) : Array(0...7)
-                let from = center(for: anim.from, files: files, ranks: ranks, square: squareSize)
-                let to = center(for: anim.to, files: files, ranks: ranks, square: squareSize)
+                let from = BoardArrowGeometry.center(for: anim.from, files: files, ranks: ranks, square: squareSize)
+                let to = BoardArrowGeometry.center(for: anim.to, files: files, ranks: ranks, square: squareSize)
                 let pos = CGPoint(
                     x: from.x + (to.x - from.x) * progress,
                     y: from.y + (to.y - from.y) * progress
@@ -1989,15 +1975,6 @@ struct AnimatingPieceOverlay: View {
         .allowsHitTesting(false)
     }
 
-    private func center(for square: BoardSquare, files: [Int], ranks: [Int], square squareSize: CGFloat) -> CGPoint {
-        guard let col = files.firstIndex(of: square.file), let row = ranks.firstIndex(of: square.rank) else {
-            return .zero
-        }
-        let x = (CGFloat(col) + 0.5) * squareSize
-        let y = (CGFloat(row) + 0.5) * squareSize
-        return CGPoint(x: x, y: y)
-    }
-
     private func symbol(for piece: Piece) -> String {
         switch piece {
         case .whitePawn: return "P"
@@ -2022,6 +1999,10 @@ struct BoardWithCoords: View {
     static let coordLabelHeight: CGFloat = 18
     static let coordLabelSpacing: CGFloat = 4
     static let boardTopInset: CGFloat = coordLabelHeight + coordLabelSpacing
+    /// Width of the rank-number gutter on each side of the grid.
+    static let rankLabelWidth: CGFloat = 18
+    /// X offset of the grid's left edge within `BoardWithCoords` (rank gutter + its trailing spacing).
+    static let boardLeadingInset: CGFloat = rankLabelWidth + coordLabelSpacing
     let boardState: BoardState
     let orientationWhiteAtBottom: Bool
     @Binding var selected: BoardSquare?
@@ -2034,9 +2015,7 @@ struct BoardWithCoords: View {
     let maxSegments: Int
     let dropHighlight: Bool
     let animatingPiece: AnimatedPiece?
-    let showThreatOverlay: Bool
-    let threatMapWhite: [BoardSquare: Int]
-    let threatMapBlack: [BoardSquare: Int]
+    let onEditSquare: (BoardSquare) -> Void
     let onMove: (BoardSquare, BoardSquare) -> Void
 
     private var fileLabels: [String] {
@@ -2052,20 +2031,20 @@ struct BoardWithCoords: View {
     var body: some View {
         VStack(spacing: Self.coordLabelSpacing) {
             HStack(spacing: 0) {
-                Spacer().frame(width: 18)
+                Spacer().frame(width: Self.rankLabelWidth)
                 ForEach(fileLabels, id: \.self) { file in
                     Text(file)
                         .font(.caption)
                         .frame(width: 56, height: Self.coordLabelHeight)
                 }
-                Spacer().frame(width: 18)
+                Spacer().frame(width: Self.rankLabelWidth)
             }
             HStack(spacing: 4) {
                 VStack(spacing: 0) {
                     ForEach(rankLabels.reversed(), id: \.self) { rank in
                         Text(rank)
                             .font(.caption)
-                            .frame(width: 18, height: 56)
+                            .frame(width: Self.rankLabelWidth, height: 56)
                     }
                 }
                 ZStack {
@@ -2075,11 +2054,14 @@ struct BoardWithCoords: View {
                         selected: $selected,
                         lastMove: lastMove,
                         legalTargets: legalTargets,
-                        showThreatOverlay: showThreatOverlay,
-                        threatMapWhite: threatMapWhite,
-                        threatMapBlack: threatMapBlack,
                         animatingPiece: animatingPiece,
                         onMove: onMove
+                    )
+                    .frame(width: Self.boardSize, height: Self.boardSize)
+                    SecondaryClickBoardOverlay(
+                        orientationWhiteAtBottom: orientationWhiteAtBottom,
+                        squareSize: Self.squareSize,
+                        onSelectSquare: onEditSquare
                     )
                     .frame(width: Self.boardSize, height: Self.boardSize)
                     AnimatingPieceOverlay(
@@ -2118,19 +2100,93 @@ struct BoardWithCoords: View {
                     ForEach(rankLabels.reversed(), id: \.self) { rank in
                         Text(rank)
                             .font(.caption)
-                            .frame(width: 18, height: 56)
+                            .frame(width: Self.rankLabelWidth, height: 56)
                     }
                 }
             }
             HStack(spacing: 0) {
-                Spacer().frame(width: 18)
+                Spacer().frame(width: Self.rankLabelWidth)
                 ForEach(fileLabels, id: \.self) { file in
                     Text(file)
                         .font(.caption)
                         .frame(width: 56)
                 }
-                Spacer().frame(width: 18)
+                Spacer().frame(width: Self.rankLabelWidth)
             }
+        }
+    }
+}
+
+private struct SecondaryClickBoardOverlay: NSViewRepresentable {
+    let orientationWhiteAtBottom: Bool
+    let squareSize: CGFloat
+    let onSelectSquare: (BoardSquare) -> Void
+
+    func makeNSView(context: Context) -> SecondaryClickCaptureView {
+        let view = SecondaryClickCaptureView()
+        view.orientationWhiteAtBottom = orientationWhiteAtBottom
+        view.squareSize = squareSize
+        view.onSelectSquare = onSelectSquare
+        return view
+    }
+
+    func updateNSView(_ nsView: SecondaryClickCaptureView, context: Context) {
+        nsView.orientationWhiteAtBottom = orientationWhiteAtBottom
+        nsView.squareSize = squareSize
+        nsView.onSelectSquare = onSelectSquare
+    }
+
+    final class SecondaryClickCaptureView: NSView {
+        var orientationWhiteAtBottom: Bool = true
+        var squareSize: CGFloat = 56
+        var onSelectSquare: ((BoardSquare) -> Void)?
+
+        override var isOpaque: Bool { false }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard bounds.contains(point), let event = NSApp.currentEvent else { return nil }
+            switch event.type {
+            case .rightMouseDown:
+                return self
+            case .leftMouseDown where event.modifierFlags.contains(.control):
+                return self
+            default:
+                return nil
+            }
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            handleSecondaryClick(event)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard event.modifierFlags.contains(.control) else { return }
+            handleSecondaryClick(event)
+        }
+
+        private func handleSecondaryClick(_ event: NSEvent) {
+            let localPoint = convert(event.locationInWindow, from: nil)
+            guard let square = boardSquare(at: localPoint) else { return }
+            onSelectSquare?(square)
+        }
+
+        // NOTE: this is a plain (non-flipped) NSView, so `point` has its origin at the bottom-left,
+        // whereas the SwiftUI `BoardGridView` it sits over lays out top-down. The `7 - rowFromBottom`
+        // flip below reconciles the two so a secondary click maps to the same logical square the user
+        // sees. If this view is ever made `isFlipped`, drop the flip.
+        private func boardSquare(at point: NSPoint) -> BoardSquare? {
+            guard squareSize > 0 else { return nil }
+
+            let col = Int(point.x / squareSize)
+            let rowFromBottom = Int(point.y / squareSize)
+            guard (0..<8).contains(col), (0..<8).contains(rowFromBottom) else { return nil }
+
+            let rowFromTop = 7 - rowFromBottom
+            let files = orientationWhiteAtBottom ? Array(0...7) : Array((0...7).reversed())
+            let ranks = orientationWhiteAtBottom ? Array((0...7).reversed()) : Array(0...7)
+            guard (0..<8).contains(rowFromTop) else { return nil }
+
+            return BoardSquare(file: files[col], rank: ranks[rowFromTop])
         }
     }
 }

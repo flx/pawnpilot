@@ -93,3 +93,13 @@
 "Limits engine strength for bot play. Higher is stronger." = "限制机器人对弈强度。越高越强。";
 "Introduces strength randomness for the bot move. 1 - no randomness, 5 - high randomness." = "为机器人走法引入随机性。1 无随机性，5 高随机性。";
 "Auto-respond with a bot move after you play." = "你走棋后自动回复机器人走法。";
+
+/* Piece editor */
+"Unknown piece code \"%@\". Use codes like wk, bn, or empty." = "未知的棋子代码 \"%@\"。请使用 wk、bn 或 empty 等代码。";
+"No piece change on %@." = "%@ 上的棋子未更改。";
+"Set %@ to %@." = "已将 %@ 设置为 %@。";
+"Cleared %@." = "已清除 %@。";
+"Apply" = "应用";
+"Cancel" = "取消";
+"Edit %@" = "编辑 %@";
+"wk, bn, empty" = "wk, bn, empty";

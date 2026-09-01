@@ -22,6 +22,10 @@
 "Black is check mate" = "Black is check mate";
 "Draw through Stalemate" = "Draw through Stalemate";
 "Dropped %d" = "Dropped %d";
+"Unknown piece code \"%@\". Use codes like wk, bn, or empty." = "Unknown piece code \"%@\". Use codes like wk, bn, or empty.";
+"No piece change on %@." = "No piece change on %@.";
+"Set %@ to %@." = "Set %@ to %@.";
+"Cleared %@." = "Cleared %@.";
 "Choose a chessboard image" = "Choose a chessboard image";
 "Detected %@" = "Detected %@";
 "Stockfish engine not found in app bundle." = "Stockfish engine not found in app bundle.";
@@ -67,6 +71,10 @@
 "Strength" = "Strength";
 "Randomness" = "Randomness";
 "Keep playing" = "Keep playing";
+"Apply" = "Apply";
+"Cancel" = "Cancel";
+"Edit %@" = "Edit %@";
+"wk, bn, empty" = "wk, bn, empty";
 "Undo / Redo" = "Undo / Redo";
 "Idle" = "Idle";
 "Detecting…" = "Detecting…";

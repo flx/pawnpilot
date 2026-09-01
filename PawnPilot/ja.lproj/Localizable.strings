@@ -93,3 +93,13 @@
 "Limits engine strength for bot play. Higher is stronger." = "ボット対戦の強さを制限します。高いほど強いです。";
 "Introduces strength randomness for the bot move. 1 - no randomness, 5 - high randomness." = "ボットの手にランダム性を加えます。1はなし、5は高め。";
 "Auto-respond with a bot move after you play." = "あなたが指した後に自動でボットが指します。";
+
+/* Piece editor */
+"Unknown piece code \"%@\". Use codes like wk, bn, or empty." = "不明な駒コード \"%@\"。wk、bn、empty などのコードを使用してください。";
+"No piece change on %@." = "%@ の駒に変更はありません。";
+"Set %@ to %@." = "%@ を %@ に設定しました。";
+"Cleared %@." = "%@ をクリアしました。";
+"Apply" = "適用";
+"Cancel" = "キャンセル";
+"Edit %@" = "%@ を編集";
+"wk, bn, empty" = "wk, bn, empty";

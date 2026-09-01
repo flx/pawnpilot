@@ -1,5 +1,17 @@
 import Foundation
-//import FENDetectorKit
+
+/// Side to move, with the FEN single-character encoding kept at the serialization boundary.
+public enum PieceColor: String, Hashable {
+    case white = "w"
+    case black = "b"
+
+    public init(fenField: String) {
+        self = fenField == "b" ? .black : .white
+    }
+
+    public var fenField: String { rawValue }
+    public var opposite: PieceColor { self == .white ? .black : .white }
+}
 
 public struct BoardState: Equatable {
     public var board: Board
@@ -38,11 +50,40 @@ public struct BoardState: Equatable {
         FENBuilder().makeFEN(
             board: board,
             activeColor: activeColor,
-            castlingAvailability: castling,
-            enPassant: enPassant,
+            castlingAvailability: Self.sanitizedCastling(castling, board: board),
+            enPassant: Self.sanitizedEnPassant(enPassant, board: board, activeColor: activeColor),
             halfmoveClock: halfmoveClock,
             fullmoveNumber: fullmoveNumber
         )
+    }
+
+    /// Drop castling rights that the board can no longer support (king or rook not on its home
+    /// square). Manual edits, board rotation, and side-to-move flips can leave the stored rights
+    /// inconsistent with the pieces; this keeps every emitted FEN internally valid.
+    static func sanitizedCastling(_ castling: String, board: Board) -> String {
+        guard castling != "-" else { return "-" }
+        let whiteKingHome = board[4, 0] == .whiteKing
+        let blackKingHome = board[4, 7] == .blackKing
+        var result = ""
+        if castling.contains("K"), whiteKingHome, board[7, 0] == .whiteRook { result.append("K") }
+        if castling.contains("Q"), whiteKingHome, board[0, 0] == .whiteRook { result.append("Q") }
+        if castling.contains("k"), blackKingHome, board[7, 7] == .blackRook { result.append("k") }
+        if castling.contains("q"), blackKingHome, board[0, 7] == .blackRook { result.append("q") }
+        return result.isEmpty ? "-" : result
+    }
+
+    /// Keep the en-passant target only when it corresponds to a pawn that could have just made a
+    /// two-square advance (correct rank, the moved pawn present, the target square empty).
+    static func sanitizedEnPassant(_ enPassant: String, board: Board, activeColor: String) -> String {
+        guard enPassant != "-", let square = parseSquare(enPassant) else { return "-" }
+        if activeColor == "b" {
+            // White just pushed: target on rank 3 (index 2), white pawn on rank 4 (index 3).
+            guard square.rank == 2, board[square.file, 2] == nil, board[square.file, 3] == .whitePawn else { return "-" }
+        } else {
+            // Black just pushed: target on rank 6 (index 5), black pawn on rank 5 (index 4).
+            guard square.rank == 5, board[square.file, 5] == nil, board[square.file, 4] == .blackPawn else { return "-" }
+        }
+        return enPassant
     }
 
     public mutating func apply(move: ChessMove) {
@@ -133,6 +174,12 @@ public struct BoardState: Equatable {
             to: BoardSquare(file: toFile, rank: toRank),
             promotion: promo
         )
+    }
+
+    /// Typed accessor for `activeColor`; the stored `String` remains the FEN-facing value.
+    public var sideToMove: PieceColor {
+        get { PieceColor(fenField: activeColor) }
+        set { activeColor = newValue.fenField }
     }
 
     public func piece(at square: BoardSquare) -> Piece? {
