@@ -1,7 +1,6 @@
 import Foundation
 import CoreGraphics
 import Combine
-//import FENDetectorKit
 
 public enum DetectionStatus {
     case idle

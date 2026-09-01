@@ -93,3 +93,13 @@
 "Limits engine strength for bot play. Higher is stronger." = "봇 대국의 엔진 강도를 제한합니다. 높을수록 강합니다.";
 "Introduces strength randomness for the bot move. 1 - no randomness, 5 - high randomness." = "봇의 수에 무작위성을 추가합니다. 1은 없음, 5는 높음.";
 "Auto-respond with a bot move after you play." = "당신이 둔 뒤에 봇이 자동으로 응답합니다.";
+
+/* Piece editor */
+"Unknown piece code \"%@\". Use codes like wk, bn, or empty." = "알 수 없는 기물 코드 \"%@\". wk, bn 또는 empty 같은 코드를 사용하세요.";
+"No piece change on %@." = "%@의 기물이 변경되지 않았습니다.";
+"Set %@ to %@." = "%@을(를) %@(으)로 설정했습니다.";
+"Cleared %@." = "%@을(를) 비웠습니다.";
+"Apply" = "적용";
+"Cancel" = "취소";
+"Edit %@" = "%@ 편집";
+"wk, bn, empty" = "wk, bn, empty";
