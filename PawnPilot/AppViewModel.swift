@@ -86,8 +86,8 @@ final class AppViewModel: ObservableObject {
     @Published var canRedo = false
 
     private let pipeline = DetectorPipeline()
-    private let engine: StockfishEngine
-    private let treeEngine: PersistentStockfishEngine
+    private let engine: any EngineAnalyzing
+    private let treeEngine: any EngineAnalyzing
     private let selector = EngineMoveSelector()
     private let moveValidator = MoveValidator()
     private let moveGenerator = LegalMoveGenerator()
@@ -113,6 +113,13 @@ final class AppViewModel: ObservableObject {
         if engineURL == nil {
             Self.reportMissingEngine(in: bundle)
         }
+    }
+
+    /// Injection seam for tests: the same view model over engines the test controls
+    /// (`FakeUCIEngine` through the real engine classes). Production uses `init()`.
+    init(engine: any EngineAnalyzing, treeEngine: any EngineAnalyzing) {
+        self.engine = engine
+        self.treeEngine = treeEngine
     }
 
     func loadImage(from url: URL) {
@@ -1038,6 +1045,21 @@ final class AppViewModel: ObservableObject {
         case .blackPawn: return "bp"
         }
     }
+
+    // for tests: install a tree without running the engine. Every node's path is
+    // marked expanded, so selecting a node never reaches `treeEngine.analyze`.
+    func seedTreeForTesting(rootState: BoardState, nodes: [TreeMoveNode]) {
+        interactionMode = .analyzeMoveTree
+        treeRootState = rootState
+        treeNodes = nodes
+        selectedTreeNodeID = nil
+        treeSelectionSnapshot = nil
+        treeExpandingPaths.removeAll()
+        treeExpandedPaths = Set(nodes.map { pathKey($0.choicePath) })
+    }
+
+    // for tests
+    var treeRootStateForTesting: BoardState? { treeRootState }
 
     private static func reportMissingEngine(in bundle: Bundle) {
         let exeDir = bundle.executableURL?.deletingLastPathComponent().path ?? "n/a"
