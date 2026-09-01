@@ -37,58 +37,14 @@ so and name what §1 and §2 nominate — do not promote silently.
 `(settings-persistence)` in §4 (a feature, not stability — filed so it is not
 lost, not so it is built).
 
-**Ordering rule inside §0 is load-bearing for one pair:**
-- `(persistent-engine-serialize-searches)` lands before
-  `(engine-consolidate)` in §1: consolidation builds on the serialised actor.
-  (The other pair — the SIGPIPE item before the cancel item — is discharged:
-  `(engine-pipe-write-after-death-sigpipe)` shipped 2026-09-01, so a cancel
-  path may now terminate the child safely.)
+**Ordering rules inside §0 are discharged** (both pairs shipped their first
+half on 2026-09-01: the SIGPIPE item before the cancel item, and the
+serialised actor before `(engine-consolidate)` in §1). Work top to bottom.
 
 ## 0. Next up — work these first, in this order
 
-*Filled 2026-09-01 from the review. Four items remain, all High. Each has a
+*Filled 2026-09-01 from the review. Three items remain, all High. Each has a
 reproducible failure and a testable acceptance check; none changes the UI.*
-
-- [ ] (persistent-engine-serialize-searches) **[hi · High · engine/concurrency]**
-  Two searches can interleave on the one persistent Stockfish pipe, splitting
-  its output between two parsers; the loser waits 300 s for a `bestmove` it
-  will never see (review F2). Where: `AppViewModel.swift:345` spawns
-  `expandTreeForSelection` as an UNSTORED `Task`; `invalidateAnalysis`
-  (`:668-684`) resets `isTreeAnalyzing = false` and bumps `treeToken` but
-  cannot cancel it; that task is suspended inside
-  `PersistentStockfishEngine.runSearch`'s `for try await` (`:99`); a following
-  Analyze passes `analyzeMoveTree`'s guard (`:248`) and re-enters the actor,
-  which records no "search in flight" (`:18-47`) and creates a SECOND
-  `reader.bytes.lines` iterator on the same `FileHandle` (`readUntil`
-  `:184-189`, then `:99`). Stockfish also receives `setoption Threads/Hash`
-  mid-search. Repro (also §5): Variations → Analyze → select a node → make a
-  board move → Analyze.
-  Two more paths in the same actor, in scope here: cancellation
-  (`treeExpansionTask?.cancel()` at `AppViewModel.swift:218, 274, 678`) fires
-  `onCancel → shutdownProcess()` (`:115-117`), which CLOSES the handles the
-  still-running search captured at `:55`; if that search resumes with a
-  buffered line and reaches `send("stop")` (`:104`), `FileHandle.write(_:)`
-  on a closed handle raises `NSFileHandleOperationException` — an uncaught
-  ObjC exception, a crash. And `analyze`'s `catch { shutdownProcess() }`
-  (`:43-46`) acts on whatever `process` is current, so a stale search failing
-  after a new one called `startProcess` tears the replacement down.
-  Direction: the actor owns ONE reader task for the child's lifetime that
-  turns stdout into an `AsyncStream<String>` of lines (this also removes the
-  **reproduced** fragility that every `readUntil`/`runSearch` creates a fresh
-  `bytes` sequence at `:89, :99, :129, :133, :185` and loses whatever the
-  previous one had buffered past its last consumed line — iterator 1 read
-  `l1` and broke, iterator 2 saw only `l5, l6`); `analyze` is an explicit
-  `idle | searching` state machine — a second call awaits the first, or sends
-  `stop`, drains to `bestmove`, then starts; shutdown/teardown is keyed to the
-  process generation it belongs to; expose `stop()` so the view model can
-  abort. Do NOT widen into consolidation here — that is
-  `(engine-consolidate)` in §1; this item's scope is "no two searches ever
-  interleave on one process".
-  Acceptance: with the §4 fake UCI child (scripted delays, an extra line after
-  `bestmove` to prove the stream survives a `break`), two overlapping
-  `analyze` calls both complete with correct, unmixed lines; the manual repro
-  above yields a fresh tree, not a stall. `hi`: concurrency-subtle; both adv
-  reviewers; `/arch-review` on the plan if it changes the engine boundary.
 
 - [ ] (view-model-task-ownership-and-cancel) **[hi · High · view-model/concurrency]**
   Stale RESULTS are rejected by tokens, stale WORK keeps running, and one
@@ -115,6 +71,24 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   `engineMove` applies no move; cancellation reaches the fake within one
   runloop turn; a result for a different FEN is dropped. `hi`: wide blast
   radius inside the view model; both adv reviewers.
+  Inherited from `(persistent-engine-serialize-searches)` (shipped 2026-09-01,
+  `75a2fb5`): (i) cancelling the task that awaits `treeEngine.analyze` is the
+  abort primitive — there is deliberately no `stop()`; the actor sends `stop`
+  itself and throws `CancellationError`, so every engine call site must
+  swallow `CancellationError`, and every cancel site must replace `treeToken`
+  in the SAME synchronous main-actor step as the `cancel()` (today all three
+  do; `:274-279` only because there is no suspension point between them) —
+  otherwise the status bar shows an untranslated "The operation couldn't be
+  completed. (Swift.CancellationError error 1.)". (ii) `expandTreeChunk`'s
+  retry loop (`:798-814`) re-checks `treeToken` only AFTER its up-to-three
+  attempts, so one stale expansion can occupy the engine for three full
+  searches — re-check the token (and `Task.isCancelled`) between attempts.
+  (iii) Cancel is prompt only if the child honours `stop`; a wedged engine
+  holds its FIFO slot until the 300 s clock and the cancelled caller then
+  gets `.timeout` — reset view-model state synchronously at the cancel, never
+  by awaiting the cancelled task. (iv) The manual repro Variations → Analyze
+  → select a node → make a board move → Analyze (§5 sitting 1) is THIS item's
+  acceptance now: after item 2 it queues instead of interleaving.
 
 - [ ] (apply-move-then-animate) **[hi · High · rules/state]**
   The model mutates 0.35 s AFTER a move was validated, against whatever the
@@ -182,7 +156,9 @@ reproducible failure and a testable acceptance check; none changes the UI.*
 "Change-cost decision". Do not promote without saying so.*
 
 - [ ] (engine-consolidate) **[hi · Medium · engine]** One engine actor, one UCI
-  parser, one `setoption` block, `stop()` as the cancel primitive. Today
+  parser, one `setoption` block, task cancellation as the cancel primitive
+  (ticket-keyed inside the actor; there is deliberately no bare `stop()` —
+  see `(persistent-engine-serialize-searches)`, `75a2fb5`). Today
   `StockfishEngine` (`:42-152`) spawns a fresh Stockfish, redoes the
   `uci`/`isready` handshake, reloads the NNUE network and starts with a cold
   128 MB hash on EVERY `analyze()` and EVERY bot move; `PersistentStockfishEngine`
@@ -248,8 +224,10 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   F8): `expandTreeForSelection` (`AppViewModel.swift:749-772`) returns at
   `guard !isTreeAnalyzing` (`:751`) and nothing retries. Direction: remember
   the latest requested path and expand it when the running expansion
-  finishes, or abort the running one via `(persistent-engine-serialize-searches)`'s
-  `stop()`. Acceptance: select A then B quickly → B's children appear.
+  finishes, or abort the running one by cancelling its task (the persistent
+  engine turns that into `stop`; there is no `stop()` method — see
+  `(persistent-engine-serialize-searches)`). Acceptance: select A then B
+  quickly → B's children appear.
 
 - [ ] (tree-variation-user-move-loses-original) **[trivial · Low · tree/undo]**
   A user move made while a variation is shown discards the position the user
