@@ -37,48 +37,17 @@ so and name what §1 and §2 nominate — do not promote silently.
 `(settings-persistence)` in §4 (a feature, not stability — filed so it is not
 lost, not so it is built).
 
-**Ordering rule inside §0 is load-bearing for two pairs:**
-- `(engine-pipe-write-after-death-sigpipe)` lands before
-  `(view-model-task-ownership-and-cancel)`: a cancel path that terminates the
-  child and then writes IS the SIGPIPE path.
+**Ordering rule inside §0 is load-bearing for one pair:**
 - `(persistent-engine-serialize-searches)` lands before
   `(engine-consolidate)` in §1: consolidation builds on the serialised actor.
+  (The other pair — the SIGPIPE item before the cancel item — is discharged:
+  `(engine-pipe-write-after-death-sigpipe)` shipped 2026-09-01, so a cancel
+  path may now terminate the child safely.)
 
 ## 0. Next up — work these first, in this order
 
-*Filled 2026-09-01 from the review. Five items, all High. Each has a
+*Filled 2026-09-01 from the review. Four items remain, all High. Each has a
 reproducible failure and a testable acceptance check; none changes the UI.*
-
-- [ ] (engine-pipe-write-after-death-sigpipe) **[standard · High · engine/process]**
-  Writing to Stockfish's stdin after the child has exited kills the app with
-  SIGPIPE — **reproduced** (a 15-line program doing exactly this exits 141;
-  review F1). Where: `StockfishEngine.swift:91-96` — the `defer` sends `quit`
-  after the read loop has ended, and the timeout task at `:99-106` is what ends
-  it (`process.terminate()` → EOF), so **every 300 s timeout is a crash**, not
-  the "Engine timed out" status the code intends. `send` (`:68-72`) uses the
-  legacy non-throwing `FileHandle.write(_:)`. Same shape in
-  `PersistentStockfishEngine.shutdownProcess` (`:166-171`), and
-  `ensureProcess` (`:120-135`) never restarts a child that has exited
-  (`if process == nil`), so after ANY engine death the next
-  `send("setoption …")` at `:78` writes to a dead pipe. No `SIGPIPE`,
-  `F_SETNOSIGPIPE` or `write(contentsOf:)` anywhere (grep). The same route
-  fires when Stockfish dies at LAUNCH (unsigned/AMFI-killed binary, sandbox
-  denial): `run()` succeeds, the child exits, EOF, the `defer` writes — so a
-  broken engine install crashes instead of surfacing `startFailed`.
-  Direction: one write helper per engine using the throwing
-  `write(contentsOf:)`, treating `EPIPE` as "engine gone" and never running
-  after the reader saw EOF; `fcntl(fd, F_SETNOSIGPIPE, 1)` on the stdin write
-  end right after `Pipe()` (local — do not install a global `signal()`
-  handler); child liveness via `terminationHandler`; `ensureProcess` restarts
-  when `isRunning == false`.
-  Acceptance: (a) a unit test that spawns `/bin/cat`, terminates it, then
-  drives the engine's send path — the test process survives and the call
-  reports "engine gone"; (b) `timeoutSeconds: 0.1` against the real binary (or
-  the §4 fake) yields `StockfishError.timeout`, no crash; (c) a persistent
-  engine whose child was killed recovers on the next `analyze`. Standard tier
-  with `adv-review-edge` (process/lifetime surface). Build
-  `(fake-uci-engine-test-double)` from §4 if the tests want it — that is part
-  of this item, not a prerequisite.
 
 - [ ] (persistent-engine-serialize-searches) **[hi · High · engine/concurrency]**
   Two searches can interleave on the one persistent Stockfish pipe, splitting
@@ -371,14 +340,6 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   one move (and say so) or extend the generator first. Start position 20 /
   400 / 8,902 / 197,281 and Kiwipete 48 / 2,039 / 97,862 are the reference
   counts. Prerequisite in spirit for `(move-semantics-dedupe)`.
-
-- [ ] (fake-uci-engine-test-double) **[standard · Medium · tests]** A scripted
-  fake UCI child (a tiny Swift executable target or a shell script under
-  `PawnPilotTests/`) that answers `uci`/`isready`, emits `info … pv` lines
-  with configurable delays, an optional extra line after `bestmove`, and can
-  exit early — so engine wrappers are testable for timeout, cancel, EOF and
-  reentrancy without Stockfish. Shared asset for the three engine items in
-  §0/§1; whichever lands first builds it.
 
 - [ ] (move-semantics-dedupe) **[standard · Medium · rules]** Two real
   implementations of move application — `BoardState.apply`
