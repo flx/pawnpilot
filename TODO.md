@@ -37,14 +37,58 @@ so and name what §1 and §2 nominate — do not promote silently.
 `(settings-persistence)` in §4 (a feature, not stability — filed so it is not
 lost, not so it is built).
 
-**Ordering rules inside §0 are discharged** (both pairs shipped their first
-half on 2026-09-01: the SIGPIPE item before the cancel item, and the
-serialised actor before `(engine-consolidate)` in §1). Work top to bottom.
+**Ordering rule inside §0 (one pair, load-bearing):**
+`(apply-move-then-animate)` lands before `(view-model-task-ownership-and-cancel)`
+— decided 2026-09-01 from the latter's plan review: cancelling a move task
+whose model mutation still happens after the animation sleep makes the stale
+move land sooner, and the cancel item's own acceptance (C5) is unobservable
+until moves apply synchronously. (The original two pairs — SIGPIPE before
+cancel, serialised actor before `(engine-consolidate)` — shipped their first
+halves on 2026-09-01.) Otherwise work top to bottom.
 
 ## 0. Next up — work these first, in this order
 
 *Filled 2026-09-01 from the review. Three items remain, all High. Each has a
 reproducible failure and a testable acceptance check; none changes the UI.*
+
+- [ ] (apply-move-then-animate) **[hi · High · rules/state]**
+  *Moved ahead of `(view-model-task-ownership-and-cancel)` on 2026-09-01: that
+  item's plan review proved (by probe) that storing and cancelling the move
+  tasks while the model still mutates after the 0.35 s sleep makes a stale
+  move land SOONER, not never — its headline guarantee and its criterion C5
+  need this item first.*
+  The model mutates 0.35 s AFTER a move was validated, against whatever the
+  board has become by then (review F4). Where: `performAnimatedMove`
+  (`AppViewModel.swift:572-586`) validates, sleeps, then `boardState.apply`
+  with no re-check; `BoardState.apply` (`BoardState.swift:89-153`) moves
+  whatever sits on `from`, side-to-move unchecked. Reachable with two clicks
+  inside 350 ms: two white moves both apply (black's turn skipped); `undo`
+  (`:588-602`) during the sleep restores the snapshot and the move lands
+  anyway with its undo entry already popped; a tree click during an
+  in-flight tree animation makes `animateTreeSelectionIncremental`
+  (`:939-958`) apply one move onto an intermediate position (white's `g1f3`
+  before black's `e7e5`), after which every later `move(fromUCI:)`/`apply`
+  compounds the error — easiest trigger: hold Down-arrow in the Variations
+  list (`ContentView.swift:1106-1126` selects per key repeat). Same class:
+  `resetBoard`/`rotatePosition`/`detect` during the sleep replace the board
+  and wipe history, then the pending `apply` lands the stale move on the NEW
+  board (`apply` checks only that SOME piece sits on `from`,
+  `BoardState.swift:90`); and `analyzeMoveTree`/`analyze` (`:265-279`,
+  `:212-230`) capture the tree root / FEN mid-animation without bumping
+  `treeAnimationToken`, so root ≠ displayed board.
+  Direction: change the model synchronously when a move is accepted (apply,
+  push snapshot, `lastMove`); the animation becomes purely visual —
+  `animatingPiece` describes a piece in flight and `BoardGridView` already
+  hides the piece at both ends while animating (`ContentView.swift:1287`), so
+  the piece appears at its destination when `animatingPiece` clears, exactly
+  as today. Tree selection computes its target with
+  `MoveTreeLogic.state(forPath:)` and sets it authoritatively; an interrupted
+  animation snaps to the target. Same 0.35 s, same hidden-square rule.
+  Acceptance: tests — second rapid `applyUserMove` by the same side is
+  rejected with "Illegal move."; `undo` during animation leaves stack and
+  board consistent; the two-click tree sequence ends at exactly
+  `MoveTreeLogic.state(forPath:)`. §5 by-eye: animation indistinguishable
+  from before. `hi`: touches every move path; both adv reviewers.
 
 - [ ] (view-model-task-ownership-and-cancel) **[hi · High · view-model/concurrency]**
   Stale RESULTS are rejected by tokens, stale WORK keeps running, and one
@@ -89,40 +133,6 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   by awaiting the cancelled task. (iv) The manual repro Variations → Analyze
   → select a node → make a board move → Analyze (§5 sitting 1) is THIS item's
   acceptance now: after item 2 it queues instead of interleaving.
-
-- [ ] (apply-move-then-animate) **[hi · High · rules/state]**
-  The model mutates 0.35 s AFTER a move was validated, against whatever the
-  board has become by then (review F4). Where: `performAnimatedMove`
-  (`AppViewModel.swift:572-586`) validates, sleeps, then `boardState.apply`
-  with no re-check; `BoardState.apply` (`BoardState.swift:89-153`) moves
-  whatever sits on `from`, side-to-move unchecked. Reachable with two clicks
-  inside 350 ms: two white moves both apply (black's turn skipped); `undo`
-  (`:588-602`) during the sleep restores the snapshot and the move lands
-  anyway with its undo entry already popped; a tree click during an
-  in-flight tree animation makes `animateTreeSelectionIncremental`
-  (`:939-958`) apply one move onto an intermediate position (white's `g1f3`
-  before black's `e7e5`), after which every later `move(fromUCI:)`/`apply`
-  compounds the error — easiest trigger: hold Down-arrow in the Variations
-  list (`ContentView.swift:1106-1126` selects per key repeat). Same class:
-  `resetBoard`/`rotatePosition`/`detect` during the sleep replace the board
-  and wipe history, then the pending `apply` lands the stale move on the NEW
-  board (`apply` checks only that SOME piece sits on `from`,
-  `BoardState.swift:90`); and `analyzeMoveTree`/`analyze` (`:265-279`,
-  `:212-230`) capture the tree root / FEN mid-animation without bumping
-  `treeAnimationToken`, so root ≠ displayed board.
-  Direction: change the model synchronously when a move is accepted (apply,
-  push snapshot, `lastMove`); the animation becomes purely visual —
-  `animatingPiece` describes a piece in flight and `BoardGridView` already
-  hides the piece at both ends while animating (`ContentView.swift:1287`), so
-  the piece appears at its destination when `animatingPiece` clears, exactly
-  as today. Tree selection computes its target with
-  `MoveTreeLogic.state(forPath:)` and sets it authoritatively; an interrupted
-  animation snaps to the target. Same 0.35 s, same hidden-square rule.
-  Acceptance: tests — second rapid `applyUserMove` by the same side is
-  rejected with "Illegal move."; `undo` during animation leaves stack and
-  board consistent; the two-click tree sequence ends at exactly
-  `MoveTreeLogic.state(forPath:)`. §5 by-eye: animation indistinguishable
-  from before. `hi`: touches every move path; both adv reviewers.
 
 - [ ] (detection-off-main-actor) **[hi · High · detection/perf]**
   Board detection runs entirely on the main thread and freezes the UI for the
