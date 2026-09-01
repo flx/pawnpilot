@@ -30,6 +30,7 @@
 "Detected %@" = "Detected %@";
 "Stockfish engine not found in app bundle." = "Stockfish engine not found in app bundle.";
 "Stockfish failed to launch." = "Stockfish failed to launch.";
+"Stockfish engine exited unexpectedly." = "Stockfish engine exited unexpectedly.";
 "Engine timed out while searching." = "Engine timed out while searching.";
 
 /* Tabs and section titles */

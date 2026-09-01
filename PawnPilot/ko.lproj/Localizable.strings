@@ -26,6 +26,7 @@
 "Detected %@" = "%@ 감지됨";
 "Stockfish engine not found in app bundle." = "앱 번들에서 Stockfish 엔진을 찾을 수 없습니다.";
 "Stockfish failed to launch." = "Stockfish를 실행하지 못했습니다.";
+"Stockfish engine exited unexpectedly." = "Stockfish 엔진이 예기치 않게 종료되었습니다.";
 "Engine timed out while searching." = "검색 중 엔진 시간이 초과되었습니다.";
 
 /* Tabs and section titles */

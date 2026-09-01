@@ -26,6 +26,7 @@
 "Detected %@" = "%@ を検出";
 "Stockfish engine not found in app bundle." = "アプリバンドル内にStockfishエンジンが見つかりません。";
 "Stockfish failed to launch." = "Stockfishの起動に失敗しました。";
+"Stockfish engine exited unexpectedly." = "Stockfish エンジンが予期せず終了しました。";
 "Engine timed out while searching." = "検索中にエンジンがタイムアウトしました。";
 
 /* Tabs and section titles */

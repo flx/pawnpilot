@@ -3,6 +3,7 @@ import Foundation
 public enum StockfishError: Error, LocalizedError {
     case notFound
     case startFailed
+    case engineGone
     case timeout
 
     public var errorDescription: String? {
@@ -11,6 +12,8 @@ public enum StockfishError: Error, LocalizedError {
             return String(localized: "Stockfish engine not found in app bundle.")
         case .startFailed:
             return String(localized: "Stockfish failed to launch.")
+        case .engineGone:
+            return String(localized: "Stockfish engine exited unexpectedly.")
         case .timeout:
             return String(localized: "Engine timed out while searching.")
         }
@@ -19,10 +22,15 @@ public enum StockfishError: Error, LocalizedError {
 
 public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
     private let engineURL: URL?
+    private let arguments: [String]
     private let timeoutSeconds: Double?
 
-    public init(engineURL: URL?, timeoutSeconds: Double? = 300.0) {
+    /// - Parameter arguments: passed to the child verbatim. Empty for Stockfish; the tests
+    ///   use it to run a scripted fake through `/bin/sh` (the sandboxed test host cannot
+    ///   exec a script file written into its own container).
+    public init(engineURL: URL?, arguments: [String] = [], timeoutSeconds: Double? = 300.0) {
         self.engineURL = engineURL
+        self.arguments = arguments
         self.timeoutSeconds = timeoutSeconds
     }
 
@@ -51,9 +59,12 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
         let stdoutPipe = Pipe()
 
         process.executableURL = url
+        process.arguments = arguments
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stdoutPipe
+
+        let writer = EngineStdinWriter(handle: stdinPipe.fileHandleForWriting)
 
         do {
             try process.run()
@@ -64,17 +75,15 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
         stdinPipe.fileHandleForReading.closeFile()
         stdoutPipe.fileHandleForWriting.closeFile()
 
-        let writer = stdinPipe.fileHandleForWriting
         func send(_ command: String) {
-            if let data = (command + "\n").data(using: .utf8) {
-                writer.write(data)
-            }
+            writer.send(command)
         }
 
         var latestLines: [Int: EngineLine] = [:]
         var gotUciOK = false
         var readySent = false
         var stopSent = false
+        var sawBestmove = false
         let targetDepth = options.depth
 
         func hasAllLinesAtDepth() -> Bool {
@@ -89,19 +98,26 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
 
         let reader = stdoutPipe.fileHandleForReading
         defer {
-            send("quit")
-            writer.closeFile()
-            reader.readabilityHandler = nil
-            process.terminate()
+            writer.send("quit")
+            writer.close()
+            if process.isRunning {
+                process.terminate()
+            }
         }
 
         let timeoutBox = TimeoutBox()
         let timeoutTask: Task<Void, Never>? = {
             guard let timeoutSeconds else { return nil }
             return Task { [timeoutSeconds] in
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                } catch {
+                    return
+                }
                 await timeoutBox.fire()
-                process.terminate()
+                if process.isRunning {
+                    process.terminate()
+                }
             }
         }()
         defer { timeoutTask?.cancel() }
@@ -139,12 +155,24 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
                 // `bestmove` means the current search is finished; accept best available lines.
                 // In strict-depth mode this prevents waiting forever when fewer legal moves than
                 // requested MultiPV are available.
+                sawBestmove = true
                 break
             }
         }
 
+        if !sawBestmove {
+            // The loop ended on EOF, not on `bestmove`: the child is gone.
+            writer.markGone()
+        }
+
         if await timeoutBox.isFired() {
             throw StockfishError.timeout
+        }
+        if !sawBestmove {
+            if !gotUciOK {
+                throw StockfishError.startFailed
+            }
+            throw StockfishError.engineGone
         }
 
         let lines = latestLines.values.sorted { $0.multipv < $1.multipv }

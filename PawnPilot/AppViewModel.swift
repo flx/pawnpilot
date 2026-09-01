@@ -964,7 +964,7 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private static func findEngineURL(in bundle: Bundle) -> URL? {
+    static func findEngineURL(in bundle: Bundle) -> URL? {
         let candidates = ["stockfish-macos-m1-apple-silicon", "stockfish"]
         let fm = FileManager.default
 

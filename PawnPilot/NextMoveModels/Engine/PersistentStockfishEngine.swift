@@ -2,16 +2,22 @@ import Foundation
 
 public actor PersistentStockfishEngine: EngineAnalyzing {
     private let engineURL: URL?
+    private let arguments: [String]
     private let timeoutSeconds: Double?
     private var process: Process?
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
-    private var writer: FileHandle?
+    private var writer: EngineStdinWriter?
     private var reader: FileHandle?
     private var didHandshake = false
+    private var childExited = false
 
-    public init(engineURL: URL?, timeoutSeconds: Double? = 300.0) {
+    /// - Parameter arguments: passed to the child verbatim. Empty for Stockfish; the tests
+    ///   use it to run a scripted fake through `/bin/sh` (the sandboxed test host cannot
+    ///   exec a script file written into its own container).
+    public init(engineURL: URL?, arguments: [String] = [], timeoutSeconds: Double? = 300.0) {
         self.engineURL = engineURL
+        self.arguments = arguments
         self.timeoutSeconds = timeoutSeconds
     }
 
@@ -52,18 +58,13 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
         requireFullDepth: Bool
     ) async throws -> [EngineLine] {
         try await ensureProcess()
-        guard let reader, let writer else { throw StockfishError.startFailed }
+        guard let reader else { throw StockfishError.startFailed }
 
         return try await withTaskCancellationHandler {
             var latestLines: [Int: EngineLine] = [:]
             var stopSent = false
+            var sawBestmove = false
             let targetDepth = options.depth
-
-            func send(_ command: String) {
-                if let data = (command + "\n").data(using: .utf8) {
-                    writer.write(data)
-                }
-            }
 
             func hasAllLinesAtDepth() -> Bool {
                 guard let targetDepth else { return true }
@@ -75,25 +76,25 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
                 return true
             }
 
-            send("setoption name Threads value \(options.threads)")
-            send("setoption name Hash value \(options.hash)")
-            send("setoption name MultiPV value \(options.multiPV)")
+            try send("setoption name Threads value \(options.threads)")
+            try send("setoption name Hash value \(options.hash)")
+            try send("setoption name MultiPV value \(options.multiPV)")
             if options.limitStrength {
-                send("setoption name UCI_LimitStrength value true")
-                send("setoption name UCI_Elo value \(options.elo)")
+                try send("setoption name UCI_LimitStrength value true")
+                try send("setoption name UCI_Elo value \(options.elo)")
             } else {
-                send("setoption name UCI_LimitStrength value false")
+                try send("setoption name UCI_LimitStrength value false")
             }
 
-            send("isready")
+            try send("isready")
             try await readUntil("readyok", from: reader)
-            send("position fen \(fen)")
+            try send("position fen \(fen)")
             if let depth = options.depth {
-                send("go depth \(depth)")
+                try send("go depth \(depth)")
             } else if let moveTime = options.movetimeMs {
-                send("go movetime \(moveTime)")
+                try send("go movetime \(moveTime)")
             } else {
-                send("go depth 12")
+                try send("go depth 12")
             }
 
             for try await line in reader.bytes.lines {
@@ -101,14 +102,23 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
                     latestLines[info.multipv] = info
                 }
                 if requireFullDepth, targetDepth != nil, !stopSent, hasAllLinesAtDepth() {
-                    send("stop")
+                    try send("stop")
                     stopSent = true
                 }
                 if line.hasPrefix("bestmove ") {
                     // `bestmove` marks end of this search; return best available lines even when
                     // strict depth could not fill every requested MultiPV slot.
+                    sawBestmove = true
                     break
                 }
+            }
+
+            if !sawBestmove {
+                // The loop ended on EOF, not on `bestmove`: the child died mid-search.
+                // `analyze`'s catch tears the process down. Nothing here may touch actor
+                // state: by now `writer`/`process` can belong to a replacement child started
+                // after a cancellation tore this one down (review finding, 2026-09-01).
+                throw StockfishError.engineGone
             }
 
             return latestLines.values.sorted { $0.multipv < $1.multipv }
@@ -118,18 +128,17 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
     }
 
     private func ensureProcess() async throws {
+        if let process, childExited || !process.isRunning {
+            shutdownProcess()          // dead child: tear down so we start fresh
+        }
         if process == nil {
             try startProcess()
         }
         if !didHandshake {
-            guard let reader, let writer else { throw StockfishError.startFailed }
-            if let data = "uci\n".data(using: .utf8) {
-                writer.write(data)
-            }
+            guard let reader else { throw StockfishError.startFailed }
+            try send("uci")
             try await readUntil("uciok", from: reader)
-            if let data = "isready\n".data(using: .utf8) {
-                writer.write(data)
-            }
+            try send("isready")
             try await readUntil("readyok", from: reader)
             didHandshake = true
         }
@@ -143,9 +152,17 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
         let stdoutPipe = Pipe()
 
         process.executableURL = engineURL
+        process.arguments = arguments
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stdoutPipe
+
+        let writer = EngineStdinWriter(handle: stdinPipe.fileHandleForWriting)
+
+        process.terminationHandler = { [weak self] exited in
+            let pid = exited.processIdentifier
+            Task { await self?.childDidExit(pid: pid) }
+        }
 
         do {
             try process.run()
@@ -159,26 +176,40 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
         self.process = process
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
-        self.writer = stdinPipe.fileHandleForWriting
+        self.writer = writer
         self.reader = stdoutPipe.fileHandleForReading
+        self.childExited = false
+    }
+
+    /// Called from `process.terminationHandler`; compares by pid (not object
+    /// identity — `Process` is not `Sendable`) so a stale callback from an
+    /// already-replaced child is a no-op.
+    private func childDidExit(pid: Int32) {
+        guard process?.processIdentifier == pid else { return }
+        childExited = true
+        writer?.markGone()
     }
 
     private func shutdownProcess() {
-        if let writer {
-            if let data = "quit\n".data(using: .utf8) {
-                writer.write(data)
-            }
-            writer.closeFile()
-        }
-        reader?.readabilityHandler = nil
+        writer?.send("quit")
+        writer?.close()
         reader?.closeFile()
-        process?.terminate()
+        if let process, process.isRunning {
+            process.terminate()
+        }
         process = nil
         stdinPipe = nil
         stdoutPipe = nil
         writer = nil
         reader = nil
         didHandshake = false
+        childExited = false
+    }
+
+    /// Every write to the child's stdin goes through here; a dead child
+    /// throws instead of writing to a closed pipe.
+    private func send(_ command: String) throws {
+        guard let writer, writer.send(command) else { throw StockfishError.engineGone }
     }
 
     private func readUntil(_ target: String, from reader: FileHandle) async throws {
@@ -186,6 +217,16 @@ public actor PersistentStockfishEngine: EngineAnalyzing {
             if line == target { return }
         }
         throw StockfishError.startFailed
+    }
+
+    // for tests
+    func childProcessIdentifierForTesting() -> Int32? {
+        process?.processIdentifier
+    }
+
+    // for tests
+    func isChildRunningForTesting() -> Bool {
+        process?.isRunning ?? false
     }
 
     private func parseInfo(line: String) -> EngineLine? {
