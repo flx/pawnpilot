@@ -283,7 +283,8 @@ final class DetectionConcurrencyTests: XCTestCase {
 
     // MARK: - E5: cancellation stops the run
 
-    /// (a) During the SCAN. F-big's edge scan alone takes ~2.5 s in Debug, so "back within one
+    /// (a) During the SCAN. F-big's edge scan alone takes ~2.0 s at -Onone (the number measured
+    /// on this tree, and the same one the comment inside this test uses), so "back within one
     /// second of the cancel" is only reachable if the scan itself gives up.
     func testE5a_cancelDuringTheScanReturnsPromptlyWithoutClassifying() async throws {
         let probe = ThreadRecordingClassifier()

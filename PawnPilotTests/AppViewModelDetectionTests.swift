@@ -9,8 +9,15 @@ import XCTest
 ///
 /// - E6: the main actor stays live while a detection runs, and the detection still lands.
 /// - E7: a board edit made during a detection wins, and the work actually stops.
-/// - E8: a landing detection beats the engine work started during it — an analysis (a) and the
-///   bot (b) — and the engine child is terminated, not merely ignored.
+/// - E8: a landing detection beats the engine work started during it — an analysis (a), a bot
+///   move still searching (b), a bot move that already LANDED (c) and a tree analysis (d) — and
+///   the engine child is terminated, not merely ignored.
+///
+/// E6 and E7 are ITEM-level pins, not commit-C discriminators: their claims — liveness, and a
+/// cancel that reaches the pipeline — are commit B's work, and both pass at B, where the
+/// pipeline is already off the main actor but the view model still lets engine work outlive a
+/// landing detection. E8a–E8d are the commit-C discriminators: each is about work the view
+/// model's detection completion must cancel.
 ///
 /// The class is `@MainActor` on purpose: every claim here is about work started FROM the main
 /// actor by a `@MainActor` view model. The helpers are deliberate copies of
@@ -30,7 +37,7 @@ final class AppViewModelDetectionTests: XCTestCase {
     ///
     /// The second is the window E6/E8 need: long enough that the main actor's liveness and the
     /// "engine work started during the detection" race are observable, short enough that E8's
-    /// landing budget (2.5 s, half the fake engine's delay) is a real bound.
+    /// landing budget (4.0 s against the fake engine's 5 s answer) is a real bound.
     ///
     /// `@unchecked Sendable` with an `NSLock` around the counter: `classify` runs on the pool
     /// while the test reads `callCount` on the main actor.
@@ -157,15 +164,22 @@ final class AppViewModelDetectionTests: XCTestCase {
         let treeLaunch = try FakeUCIEngine.makeLaunch(.init(infoDelayMs: treeInfoDelayMs))
         addTeardownBlock { treeLaunch.cleanUp() }
 
+        // 30 s, not the 5 s `AppViewModelTaskTests` uses: E8's oracle is "the fake never logged
+        // `<bestmove`", and at 5 s the TIMEOUT satisfied it instead of the cancel under test.
+        // The one-shot engine's clock starts at `process.run()`, and the handshake to `go`
+        // measures 11–13 ms, so against a 5 s fake delay the marker lands at t_run + 5.03 s and
+        // a 5 s clock terminated the child 27–35 ms before it (measured on this tree, 3 runs).
+        // Nothing in this file can time out at 30 s, so an absent marker now means the
+        // completion's cancel killed the search.
         let engine = StockfishEngine(
             engineURL: engineLaunch.executable,
             arguments: engineLaunch.arguments,
-            timeoutSeconds: 5.0
+            timeoutSeconds: 30.0
         )
         let treeEngine = PersistentStockfishEngine(
             engineURL: treeLaunch.executable,
             arguments: treeLaunch.arguments,
-            timeoutSeconds: 5.0
+            timeoutSeconds: 30.0
         )
         let viewModel = AppViewModel(engine: engine, treeEngine: treeEngine, pipeline: pipeline)
         return (viewModel, engineLaunch, treeLaunch)
@@ -259,6 +273,14 @@ final class AppViewModelDetectionTests: XCTestCase {
 
         // THE liveness claim. F-big's edge scan alone runs ~2 s at -Onone; before Tiers 1–2 it
         // ran ON the main actor, so this 100 ms sleep could not resume until it was over.
+        //
+        // Why 0.4 s is a safe bound here and not merely a lucky one: in this 0–0.1 s window the
+        // detection is still in its edge scan, which occupies exactly ONE cooperative-pool
+        // thread for its first ~2 s. The 64-way classification fan-out — the part that can hold
+        // every pool thread at once and delay a main-actor poll by ~340 ms (measured; it is why
+        // E8's landing budget is 4 s) — does not start until ~3 s in: ~2 s of scan plus the
+        // probe's 1 s sleep. So nothing in this window competes for the main actor except a
+        // regression that puts the pipeline back on it, and that costs seconds, not 400 ms.
         let sleepStartedAt = Date()
         try await Task.sleep(nanoseconds: 100_000_000)
         let mainActorSleep = Date().timeIntervalSince(sleepStartedAt)
@@ -330,10 +352,16 @@ final class AppViewModelDetectionTests: XCTestCase {
             "the move is on the model from `applyMoveNow` on"
         )
 
-        // Past F-big's 2.3–2.8 s scan at -Onone: had the cancel not reached the pipeline, the
-        // scan would have finished and the classifier would have run by now.
+        // Past F-big's ~2.0 s scan at -Onone: had the cancel not reached the pipeline, the scan
+        // would have finished and the classifier would have run by now. That is what this wait
+        // proves — the abandoned run never lands on the board the move produced.
         try await advance(4.0)
 
+        // NOT a pin on how promptly the scan gives up: `process` re-checks `Task.isCancelled`
+        // immediately before it classifies, and `applyUserMove` cancelled this task in the same
+        // synchronous turn that started it — before its body ran at all. So the classifier is
+        // skipped whatever the in-scan checks do. E5a in `DetectionConcurrencyTests` is the
+        // in-scan promptness pin (cancel mid-scan, back within 1 s).
         XCTAssertEqual(
             probe.callCount,
             0,
@@ -381,10 +409,14 @@ final class AppViewModelDetectionTests: XCTestCase {
         }
         let landing = Date().timeIntervalSince(goAt)
         print("[detection] E8a landing (go -> .succeeded): \(String(format: "%.0f", landing * 1000)) ms")
-        // Half the fake's 5 s delay: the oracle below only means anything while the detection
-        // lands well before the search would have answered on its own.
-        if landing > 2.5 {
-            XCTFail("the detection landed \(String(format: "%.2f", landing)) s after `go`, past the 2.5 s budget")
+        // The oracle below only means anything while the detection lands before the fake would
+        // have answered on its own — 5 s after its `go`, the true ceiling. The budget is 4.0 s,
+        // not the 2.5 s this started at: the landing measures ~1.3 s, but the poll that
+        // observes it runs on the main actor and can be up to ~340 ms late while the 64-crop
+        // fan-out saturates the cooperative pool, and 2.5 s left too little room for that on a
+        // loaded host (the suite runs in 7 parallel test hosts).
+        if landing > 4.0 {
+            XCTFail("the detection landed \(String(format: "%.2f", landing)) s after `go`, past the 4.0 s budget")
         }
 
         XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement")
@@ -400,6 +432,10 @@ final class AppViewModelDetectionTests: XCTestCase {
         )
         XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement, 5 s on")
         XCTAssertTrue(vm.engineLines.isEmpty)
+        // The status bar still belongs to the detection: no tail of the superseded search — a
+        // late result, a timeout, an error — has written over it in the window where the fake
+        // would have answered.
+        XCTAssertEqual(vm.statusMessage, String(localized: "Detected position."))
     }
 
     // MARK: - E8b: a landing detection beats a bot move started during it
@@ -435,8 +471,10 @@ final class AppViewModelDetectionTests: XCTestCase {
         }
         let landing = Date().timeIntervalSince(goAt)
         print("[detection] E8b landing (go -> .succeeded): \(String(format: "%.0f", landing * 1000)) ms")
-        if landing > 2.5 {
-            XCTFail("the detection landed \(String(format: "%.2f", landing)) s after `go`, past the 2.5 s budget")
+        // 4.0 s for the reason spelled out in E8a: the ceiling is the fake's 5 s answer, and a
+        // main-actor poll can be ~340 ms late while the fan-out saturates the pool.
+        if landing > 4.0 {
+            XCTFail("the detection landed \(String(format: "%.2f", landing)) s after `go`, past the 4.0 s budget")
         }
 
         XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement")
@@ -450,5 +488,114 @@ final class AppViewModelDetectionTests: XCTestCase {
         )
         XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement, 5 s on")
         XCTAssertFalse(vm.isEngineThinking)
+        // The status bar still belongs to the detection: no tail of the cancelled bot search —
+        // a late "Engine played …", a timeout, an error — has written over it.
+        XCTAssertEqual(vm.statusMessage, String(localized: "Detected position."))
+    }
+
+    // MARK: - E8c: a landing detection wipes a bot move that already LANDED
+
+    /// The same rule as E8b — a landing detection beats the engine work started during it —
+    /// applied to the case where that work has already FINISHED. The bot's move is on the
+    /// board, reported in the status bar and undoable before the detection lands, and the
+    /// detection then wipes all three. That is an accepted behaviour delta of this item, not an
+    /// accident: the bot moved on the board the detection was computed to replace.
+    func testE8c_aBotMoveThatLandsDuringADetectionIsWipedWhenTheDetectionLands() async throws {
+        let probe = SlowThenRealClassifier()
+        XCTAssertTrue(probe.isModelAvailable, "the real Piece13 model must load from the test host's bundle")
+        // 100 ms per info line at depth 1, so the search answers in ~0.1 s and the move lands
+        // (apply, then a 0.35 s flight) well inside the probe's 1 s window — the opposite of
+        // E8b's 5 s, where the bot is still searching when the detection lands.
+        let context = try makeViewModel(
+            pipeline: DetectorPipeline(classifier: probe),
+            engineInfoDelayMs: 100,
+            engineBestmove: "e2e4"
+        )
+        let vm = context.vm
+        vm.searchDepth = 1
+        vm.interactionMode = .playAgainstComputer
+
+        vm.detect(cgImage: try realFixtureImage())
+        XCTAssertTrue(isRunning(vm.detectionStatus), "the detection should be running")
+
+        vm.engineMove()
+
+        try await waitUntil("the bot's move to land on the model") {
+            vm.boardState.piece(at: self.square("e4")) == .whitePawn
+        }
+        // The state the detection is about to wipe: the move is on the model and in the undo
+        // stack, and the detection it was started under is still running.
+        XCTAssertTrue(vm.canUndo, "the bot's move pushed an undo snapshot")
+        XCTAssertTrue(
+            isRunning(vm.detectionStatus),
+            "a bot move that lands must not supersede the detection either"
+        )
+
+        try await waitUntil("the detection to land", timeout: 15) {
+            self.succeededOutput(vm.detectionStatus) != nil
+        }
+
+        XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement")
+        // Not "Engine played e2e4.": the detection's status replaces the bot's report.
+        XCTAssertEqual(vm.statusMessage, String(localized: "Detected position."))
+        XCTAssertFalse(vm.canUndo, "the detection reset the history the bot's move was in")
+        XCTAssertFalse(vm.isEngineThinking)
+        XCTAssertNil(vm.animatingPiece)
+    }
+
+    // MARK: - E8d: a landing detection clears a tree analysis started during it
+
+    /// The completion's `cancelSupersededWork()` and its own tree cleanup, which nothing else
+    /// covers: a move tree asked for DURING a detection is computed for the board the detection
+    /// is about to replace, so when the detection lands the nodes, the root and the flag all
+    /// go — and the cancel reaches the persistent child as `stop`.
+    func testE8d_aLandingDetectionClearsATreeAnalysisStartedDuringIt() async throws {
+        let probe = SlowThenRealClassifier()
+        XCTAssertTrue(probe.isModelAvailable, "the real Piece13 model must load from the test host's bundle")
+        // 5 s per info line: the expansion's `go` cannot answer on its own before the detection
+        // lands (~1.3 s), so the search is genuinely in flight when the completion cancels it.
+        let context = try makeViewModel(
+            pipeline: DetectorPipeline(classifier: probe),
+            treeInfoDelayMs: 5000
+        )
+        let vm = context.vm
+        vm.searchDepth = 1
+        vm.treeBranchCount = 1
+        vm.interactionMode = .analyzeMoveTree
+
+        vm.detect(cgImage: try realFixtureImage())
+        XCTAssertTrue(isRunning(vm.detectionStatus), "the detection should be running")
+
+        // Started DURING the detection, on the board the detection is about to replace.
+        vm.analyzeMoveTree()
+        // It must not have stopped at one of its guards — everything below would then be
+        // vacuously true.
+        XCTAssertTrue(vm.isTreeAnalyzing, "the tree analysis must actually have started")
+        XCTAssertTrue(
+            isRunning(vm.detectionStatus),
+            "a tree analysis must not supersede a running detection"
+        )
+        // And the search must be in flight, not merely queued, when the detection lands.
+        try await waitForLog(context.treeLaunch, toContain: "go")
+
+        try await waitUntil("the detection to land", timeout: 15) {
+            self.succeededOutput(vm.detectionStatus) != nil
+        }
+
+        XCTAssertEqual(placement(of: vm.boardState), Self.realFixturePlacement, "F-real: placement")
+        XCTAssertEqual(vm.statusMessage, String(localized: "Detected position."))
+        XCTAssertTrue(vm.treeNodes.isEmpty, "the tree for the replaced board must not survive it")
+        XCTAssertFalse(vm.isTreeAnalyzing, "the superseded expansion released its flag")
+        XCTAssertNil(vm.treeRootStateForTesting, "the completion clears the tree root too")
+
+        // The cancel REACHED the persistent engine — it was not merely ignored:
+        // `PersistentStockfishEngine.cancel` turns a cancelled search into `stop` on the child
+        // it is searching on. Nothing else here can produce one: at `treeBranchCount = 1` the
+        // expansion asks for multipv 2 and the fake only ever emits multipv 1, so
+        // `hasAllLinesAtDepth()` is never satisfied and the strict-depth branch that would send
+        // an early `stop` of its own never fires.
+        try await waitUntil("the tree engine to be told to stop", timeout: 2) {
+            context.treeLaunch.commandLog().contains("stop")
+        }
     }
 }

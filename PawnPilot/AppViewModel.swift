@@ -240,6 +240,12 @@ final class AppViewModel: ObservableObject {
             // place that cancels `detectionTask`, and it bumps `detectionToken` in the same
             // synchronous block, so a run that returns `DetectorPipeline.cancelledOutput`
             // ALWAYS returns here: its empty board can never be published as a detection.
+            // That is true FOR THE REAL CLASSIFIER, which shortens its result only when the
+            // task is cancelled. `process` returns `cancelledOutput` for ANY short result
+            // (`classified.count != crops.count`), so an injected probe that returns fewer
+            // results than crops on an UNCANCELLED task arrives here with a matching token,
+            // and its empty board would be published. Test seam only — no production
+            // conformer does that.
             guard token == self.detectionToken else { return }
             var state = BoardState(fromDetection: output)
             if output.suggestedFlipForFEN {
