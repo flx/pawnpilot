@@ -170,6 +170,18 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   stays trapping (invariant), strings can no longer reach it. Tests: `"e0e4"`,
   `"e9e4"`, `"i1a1"`, `"e2e"` → nil. `adv-review-behavior` not needed; pure.
 
+- [ ] (detector-mode-tiebreak-nondeterministic) **[trivial · Low · detection]**
+  Found 2026-09-01 by the `(detection-off-main-actor)` plan review, by
+  probe: `BoardDetector.modeValue` (`BoardDetection.swift:227-238`) picks the
+  most populated bin with `bins.max(by:)` over a `Dictionary`, whose
+  iteration order is per-process random, so an exact tie between two bins
+  returns a DIFFERENT band on different runs — reproduced: the same synthetic
+  image gave `(0,128,…)`, `(64,128,…)`, `(128,128,…)` and `(0,0,…)` across
+  eight launches. Direction: break ties deterministically (lowest bin key,
+  or the bin with the smallest mean absolute deviation). Test: a values list
+  with two equal-count bins returns the same answer on every call. No UI
+  change.
+
 - [ ] (dead-detection-and-recents-purge) **[standard · Medium · memory/dead-code]**
   Deletion-only. `detectionStatusView` (`ContentView.swift:643-670`) and
   `recentsView` (`:672-708`) are defined and never mounted (grep); so
