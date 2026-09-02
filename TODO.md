@@ -45,52 +45,8 @@ guarantee needed synchronous moves first). Work top to bottom.
 
 ## 0. Next up — work these first, in this order
 
-*Filled 2026-09-01 from the review. Two items remain, both High. Each has a
-reproducible failure and a testable acceptance check; none changes the UI.*
-
-- [ ] (view-model-task-ownership-and-cancel) **[hi · High · view-model/concurrency]**
-  Stale RESULTS are rejected by tokens, stale WORK keeps running, and one
-  stale result is not rejected at all (review F5). Where: unstored `Task`s at
-  `AppViewModel.swift:228` (`analyze`), `:386` (`engineMove`), `:418`
-  (`playSelectedLine`), `:437` (`applyUserMove`), `:332`/`:345`
-  (`selectTreeNode`); `invalidateAnalysis` cancels only `treeExpansionTask`;
-  `StockfishEngine.runEngine` has no cancellation handling, so a superseded
-  search runs to full depth on `activeProcessorCount/2` threads beside its
-  replacement. The unguarded one: `engineMove` (`:386-407`) applies
-  `line.moves.first` after its `await` with NO token check (contrast
-  `analyze` at `:231`), and `invalidateAnalysis` never resets
-  `isEngineThinking` — Reset/Undo/new image during "Engine thinking…" plays
-  the OLD position's move on the NEW board whenever it is legal there;
-  `applyUserMove` (`:430-436`) has no `isEngineThinking` guard, so a user
-  move during "Engine thinking…" is the same failure. `playSelectedLine`
-  (`:410-428`) replays a PV onto whatever the board becomes mid-replay.
-  Direction: per-purpose stored task handles (or one `activeTasks` set) that
-  `invalidateAnalysis` cancels; engine wrappers honour cancellation
-  (`withTaskCancellationHandler` → `stop` + drain, or terminate — safe only
-  after the SIGPIPE item); gate every asynchronous result on the FEN captured
-  at start, not a bare `UUID`; `isEngineThinking` cleared on invalidate.
-  Acceptance: `AppViewModel` tests with an injected fake engine — Reset during
-  `engineMove` applies no move; cancellation reaches the fake within one
-  runloop turn; a result for a different FEN is dropped. `hi`: wide blast
-  radius inside the view model; both adv reviewers.
-  Inherited from `(persistent-engine-serialize-searches)` (shipped 2026-09-01,
-  `75a2fb5`): (i) cancelling the task that awaits `treeEngine.analyze` is the
-  abort primitive — there is deliberately no `stop()`; the actor sends `stop`
-  itself and throws `CancellationError`, so every engine call site must
-  swallow `CancellationError`, and every cancel site must replace `treeToken`
-  in the SAME synchronous main-actor step as the `cancel()` (today all three
-  do; `:274-279` only because there is no suspension point between them) —
-  otherwise the status bar shows an untranslated "The operation couldn't be
-  completed. (Swift.CancellationError error 1.)". (ii) `expandTreeChunk`'s
-  retry loop (`:798-814`) re-checks `treeToken` only AFTER its up-to-three
-  attempts, so one stale expansion can occupy the engine for three full
-  searches — re-check the token (and `Task.isCancelled`) between attempts.
-  (iii) Cancel is prompt only if the child honours `stop`; a wedged engine
-  holds its FIFO slot until the 300 s clock and the cancelled caller then
-  gets `.timeout` — reset view-model state synchronously at the cancel, never
-  by awaiting the cancelled task. (iv) The manual repro Variations → Analyze
-  → select a node → make a board move → Analyze (§5 sitting 1) is THIS item's
-  acceptance now: after item 2 it queues instead of interleaving.
+*Filled 2026-09-01 from the review. One item remains, High. It has a
+reproducible failure and a testable acceptance check; it does not change the UI.*
 
 - [ ] (detection-off-main-actor) **[hi · High · detection/perf]**
   Board detection runs entirely on the main thread and freezes the UI for the
@@ -203,14 +159,17 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   none of the removed names, memory after three drops measured lower.
 
 - [ ] (tree-selection-expansion-dropped-while-busy) **[standard · Low · tree]**
-  Selecting a node while another branch is expanding never expands it (review
-  F8): `expandTreeForSelection` (`AppViewModel.swift:749-772`) returns at
-  `guard !isTreeAnalyzing` (`:751`) and nothing retries. Direction: remember
-  the latest requested path and expand it when the running expansion
-  finishes, or abort the running one by cancelling its task (the persistent
-  engine turns that into `stop`; there is no `stop()` method — see
-  `(persistent-engine-serialize-searches)`). Acceptance: select A then B
-  quickly → B's children appear.
+  Selecting a node while the ROOT expansion is still running never expands
+  it (review F8, narrowed 2026-09-01): `expandTreeForSelection` returns at
+  its `guard !isTreeAnalyzing || treeFlagOwner == owner` when the flag belongs
+  to `analyzeMoveTree`'s expansion, and nothing retries. The selection-during-
+  selection half shipped in `(view-model-task-ownership-and-cancel)` (`c5a31ca`,
+  test C7: selecting B during A's expansion cancels A and expands B, the flag
+  handed over without a blank frame). Direction for the rest: remember the
+  latest requested path and expand it when the root expansion finishes, or
+  let a selection cancel the root expansion too (owner-keyed already).
+  Acceptance: Analyze (tree) then select a node before "Tree analysis ready."
+  → the node's children appear once the root expansion finishes.
 
 - [ ] (tree-variation-user-move-loses-original) **[trivial · Low · tree/undo]**
   A user move made while a variation is shown discards the position the user

@@ -83,7 +83,9 @@ xcodebuild -scheme PawnPilot -project PawnPilot.xcodeproj -configuration Debug \
 - Baseline on 2026-09-01: build + the 35-method unit suite green on the
   primary checkout's working tree (which then carried an uncommitted ~900-line
   refactor: `MoveTreeLogic`, `PieceColor`, castling/en-passant sanitising, the
-  piece editor, and the tests for them).
+  piece editor, and the tests for them). After the same day's §0 items the
+  suite is 94 methods (`c5a31ca`); the engine and view-model tests drive the
+  real engine classes over `PawnPilotTests/FakeUCIEngine.swift`.
 
 ## Known pre-existing flakes
 None catalogued yet. If a test fails, re-run it once before investigating, and

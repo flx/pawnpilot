@@ -454,3 +454,6 @@ in-loop check stays). `seedTreeForTesting(rootState:nodes:markExpanded: Bool = t
 - 2026-09-01 · Gate 23 on the review-fixed tree: 94/94 green (C3b, C13
   added), zero app-target warnings. Committed on that run; gate 24 (repeat,
   flake data) recorded at `/done`.
+- 2026-09-01 · Gate 24 (repeat on the committed tree): 94/94 green. Five
+  green gate runs on this item in total (20–22 on the pre-review tree,
+  23–24 on the fixed one), no flake observed. Shipped as `c5a31ca`.
