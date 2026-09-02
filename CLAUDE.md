@@ -63,7 +63,17 @@ copied). The rules above are prose only — keep them anyway.
   and approachable concurrency is on. A `nonisolated async` function still
   runs on the CALLER's actor; only `@concurrent` (or `Task.detached` around
   nonisolated synchronous work) leaves the main thread. Every FENDetector type
-  is main-actor-isolated today — that is why detection freezes the UI.
+  WAS main-actor-isolated — that is why detection used to freeze the UI; they
+  are `nonisolated` since `(detection-off-main-actor)` (2026-09-02).
+- **A FENDetector phase entry is SIGTRAP, not XCTFail, when called on main.**
+  `process`, `detectBoard`, `normalize`, `estimateOrientation`,
+  `extractSquares`, `ImageSanitizer.sanitize` and `PieceClassifier.classify`
+  each open with a DEBUG `dispatchPrecondition(condition: .notOnQueue(.main))`.
+  Those preconditions are sound only because `@concurrent DetectorPipeline.process`
+  is their one caller and is guaranteed off the main actor: keep it the only
+  production caller. A test that calls a phase directly must do so off the main
+  actor (`Task.detached`) — a wrong call crashes the test host (exit 133), it
+  does not fail an assertion.
 
 ## Build and test
 ```

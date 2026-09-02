@@ -139,6 +139,14 @@ nonisolated public final class DetectorPipeline: Sendable {
 
                 for result in classified {
                     let mapped = mapPosition(result.position, orientation: orientation)
+                    // `Board`'s subscript traps on an off-board index, in -O too, and the
+                    // classifier is an injectable public seam: a conformer that reports a
+                    // position outside 0..<8 must lose its result, not kill the app. Skipping
+                    // the whole result also keeps its note and its low-confidence entry out,
+                    // so warning order and text are untouched for every valid result.
+                    guard (0..<8).contains(mapped.file), (0..<8).contains(mapped.rank) else {
+                        continue
+                    }
                     board[mapped.file, mapped.rank] = result.piece
                     if let note = result.note {
                         warnings.append(DetectionWarning(message: "Square \(mapped.file),\(mapped.rank): \(note)"))

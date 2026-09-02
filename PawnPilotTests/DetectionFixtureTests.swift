@@ -13,9 +13,12 @@ import XCTest
 /// FAILURE here, not a skip: the model is in the bundle (the other unit tests prove it), so
 /// its absence would mean the bundle layout broke.
 ///
-/// The class is `@MainActor` because every type under `PawnPilot/FENDetector` is main-actor
-/// isolated today (the app target's default isolation); after Tier 1 they are `nonisolated`
-/// and this annotation becomes redundant but stays correct.
+/// The class is `@MainActor` and MUST STAY so. It is not decoration and it did not become
+/// redundant when Tier 1 made every `PawnPilot/FENDetector` type `nonisolated`: it is what
+/// drives `process` FROM the main actor, which is the only way the E9 `dispatchPrecondition`
+/// at each phase entry means anything — a phase that lost its `nonisolated` would hop back
+/// onto the caller's actor, and only a main-actor caller makes that hop land on main and trap.
+/// Drop the annotation and every E9 precondition here is armed against nothing.
 ///
 /// Each test prints `[detection] <fixture>: <N> ms` around the `process` call. The F-big
 /// number is the "before" wall clock for a Retina-sized input; nothing asserts on it.
@@ -199,6 +202,32 @@ final class DetectionFixtureTests: XCTestCase {
         String(output.fen.split(separator: " ").first ?? "")
     }
 
+    /// The detector's own low-confidence report, which `DetectorPipeline.process` emits for any
+    /// `detectBoard` confidence below 0.4 — the edge path scores 0.2 and the centred-square
+    /// fallback 0.05 (`BoardDetector.detectBoard`), so both fixtures' paths produce one.
+    private func lowDetectionConfidenceWarning(_ confidence: Float) -> String {
+        "Board detection confidence is low (\(String(format: "%.2f", confidence)))."
+    }
+
+    /// `"Square <file>,<rank>: Low confidence"` — the message `DetectorPipeline.process` builds
+    /// from `PieceClassifier`'s note for a square classified below 0.2, with both indices on the
+    /// board. Pinned as a shape rather than 43 literals: which squares are below the threshold
+    /// is the threshold-brittle claim, already counted separately.
+    private static func isLowConfidenceSquareWarning(_ message: String) -> Bool {
+        let prefix = "Square "
+        let suffix = ": Low confidence"
+        guard message.hasPrefix(prefix), message.hasSuffix(suffix) else { return false }
+        let coordinates = message
+            .dropFirst(prefix.count)
+            .dropLast(suffix.count)
+            .split(separator: ",", omittingEmptySubsequences: false)
+        guard coordinates.count == 2,
+              let fileIndex = Int(coordinates[0]),
+              let rank = Int(coordinates[1])
+        else { return false }
+        return (0..<8).contains(fileIndex) && (0..<8).contains(rank)
+    }
+
     // MARK: - F-edge (synthetic, 768×768, the edge-detector path)
 
     func testFEdge_quadIsExactAndBoardIsEmpty() async throws {
@@ -220,11 +249,12 @@ final class DetectionFixtureTests: XCTestCase {
             output.lowConfidenceSquares.isEmpty,
             "F-edge: \(output.lowConfidenceSquares.count) squares classified below 0.2"
         )
+        // TEXT, not just the count: a cancelled output also carries exactly one warning, so a
+        // count-only pin would pass on a run that detected and classified nothing at all.
         XCTAssertEqual(
-            output.warnings.count,
-            1,
-            "F-edge: only the low-detection-confidence warning is expected, got "
-                + "\(output.warnings.map(\.message))"
+            output.warnings.map(\.message),
+            [lowDetectionConfidenceWarning(0.2)],
+            "F-edge: only the low-detection-confidence warning of the edge path is expected"
         )
     }
 
@@ -248,11 +278,11 @@ final class DetectionFixtureTests: XCTestCase {
             output.lowConfidenceSquares.isEmpty,
             "F-big: \(output.lowConfidenceSquares.count) squares classified below 0.2"
         )
+        // TEXT, not just the count — see F-edge.
         XCTAssertEqual(
-            output.warnings.count,
-            1,
-            "F-big: only the low-detection-confidence warning is expected, got "
-                + "\(output.warnings.map(\.message))"
+            output.warnings.map(\.message),
+            [lowDetectionConfidenceWarning(0.2)],
+            "F-big: only the low-detection-confidence warning of the edge path is expected"
         )
     }
 
@@ -292,6 +322,21 @@ final class DetectionFixtureTests: XCTestCase {
 
         assertRealModelClassified(output, fixture: "F-real")
         XCTAssertEqual(output.warnings.count, 44, "F-real: warning count (threshold-brittle)")
+        // TEXT as well as count. The first warning is the detector's: F-real takes the
+        // centred-square fallback, whose confidence is 0.05 — below `process`'s 0.4 threshold.
+        XCTAssertEqual(
+            output.warnings.first?.message,
+            lowDetectionConfidenceWarning(0.05),
+            "F-real: the first warning is the fallback path's low-confidence report"
+        )
+        // The other 43 are one classifier note per square below 0.2, and nothing else — no
+        // "Detection cancelled.", no "model not available", no normalize/extract failure.
+        let squareWarnings = output.warnings.dropFirst().map(\.message)
+        XCTAssertEqual(
+            squareWarnings.filter { !Self.isLowConfidenceSquareWarning($0) },
+            [],
+            "F-real: warnings other than per-square low-confidence notes"
+        )
         XCTAssertEqual(
             output.lowConfidenceSquares.count,
             43,

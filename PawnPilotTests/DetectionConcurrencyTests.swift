@@ -226,7 +226,9 @@ final class DetectionConcurrencyTests: XCTestCase {
                       file: file, line: line)
         XCTAssertEqual(output.board.squares.compactMap { $0 }.count, 0,
                        "\(context): a cancelled run published pieces", file: file, line: line)
-        XCTAssertEqual(output.fen, DetectorPipeline.cancelledOutput.fen, "\(context): fen",
+        // The literal, not `DetectorPipeline.cancelledOutput.fen`: `process` returns that very
+        // instance on a cancel, so comparing against it compared the value to itself.
+        XCTAssertEqual(output.fen, "8/8/8/8/8/8/8/8 w - - 0 1", "\(context): fen",
                        file: file, line: line)
         XCTAssertFalse(output.suggestedFlipForFEN, "\(context): flip", file: file, line: line)
         XCTAssertFalse(output.suggestedCastling.white, "\(context): white castling",
@@ -292,7 +294,14 @@ final class DetectionConcurrencyTests: XCTestCase {
         let task = Task {
             box.finish(await pipeline.process(cgImage: image))
         }
-        try await Task.sleep(nanoseconds: 100_000_000)
+        // 20 ms, not 100: the cancel has to land INSIDE the run in both configurations. Measured
+        // on this tree, `detectBoard` on F-big takes ~2.0 s at -Onone but only ~28 ms at -O, and
+        // the whole -O pipeline finishes in ~57 ms — so a 100 ms window lands after an optimised
+        // build has already published a real output, and `assertIsCancelledOutput` would fail.
+        // 20 ms is inside the scan in both. Landing a little late is still safe: `process`
+        // re-checks `Task.isCancelled` after each phase, and the classifier is only reached
+        // after the last of those checks.
+        try await Task.sleep(nanoseconds: 20_000_000)
         let cancelledAt = Date()
         task.cancel()
 
@@ -311,6 +320,16 @@ final class DetectionConcurrencyTests: XCTestCase {
     /// 64 crops run (the pipeline then publishes the board they made, which this asserts it
     /// does NOT), so this fails on any build that lets the fan-out finish.
     func testE5b_cancelDuringTheFanOutSkipsTheRemainingCrops() async throws {
+        // The `cropsRun < 64` claim needs the cooperative pool to be narrower than the 64 crops:
+        // on a host with 64+ cores every child can start before the first one's cancel is seen,
+        // and all 64 legitimately run. Skip rather than pin a false claim to the core count.
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        try XCTSkipUnless(
+            cores < 64,
+            "the fan-out must be wider than the pool for a cancel to skip crops; this host "
+                + "reports \(cores) cores"
+        )
+
         let canceller = CancelBox()
         let probe = SlowFanOutClassifier(onFirstCrop: { canceller.cancel() })
         let pipeline = DetectorPipeline(classifier: probe)

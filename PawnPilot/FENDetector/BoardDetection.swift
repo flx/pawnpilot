@@ -54,6 +54,9 @@ nonisolated public final class BoardDetector: Sendable {
 
     /// Edge-based detection: find a checkered band by scanning rows/cols for long alternating runs.
     private static func edgeBasedDetect(image: CGImage) -> BoardQuadrilateral? {
+        // First statement on purpose: the very next line copies the whole image out of its data
+        // provider (59 MB on a 5K capture), which an already-cancelled detection must not pay.
+        if Task.isCancelled { return nil }
         guard let data = image.dataProvider?.data, let ptr = CFDataGetBytePtr(data) else { return nil }
         let bpp = image.bitsPerPixel / 8
         guard bpp >= 3 else { return nil }

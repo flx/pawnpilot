@@ -34,7 +34,6 @@ nonisolated public final class PieceClassifier: PieceClassifying, @unchecked Sen
     }
 
     private let model: ClassifierModel?
-    private let labels: [String] = ["empty", "P", "N", "B", "R", "Q", "K", "p", "n", "b", "r", "q", "k"]
     private let loggingEnabled: Bool
 
     public init(model: MLModel? = nil, loggingEnabled: Bool = false) {
