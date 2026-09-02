@@ -176,4 +176,115 @@ final class EngineProcessTests: XCTestCase {
         let pid = await engine.childProcessIdentifierForTesting()
         XCTAssertNotNil(pid, "expected a running replacement child after recovery")
     }
+
+    // MARK: - C6: cancelling a one-shot search terminates its child promptly
+    //
+    // `(view-model-task-ownership-and-cancel)` Tier 1: the one-shot engine honours
+    // cancellation by terminating the child AND closing its read end, then reports
+    // `CancellationError` from its precedence ladder.
+
+    func testC6_oneShotEngine_cancelDuringSearch_throwsCancellationAndTerminatesTheChild() async throws {
+        // depth 1 with a 1.5 s delay: a search that survives emits its single info line, sleeps
+        // 1.5 s and logs `<bestmove` at ~1.6 s. Cancelling makes `StockfishEngine` call
+        // `Process.terminate()`, which signals the child's whole process GROUP (Foundation
+        // spawns it as a group leader — measured 2026-09-01), so the search subshell dies with
+        // its parent right then and never reaches its post-loop liveness check; that check is
+        // for `PersistentStockfishEngine.killChild`, which SIGKILLs the pid alone. The 2.5 s
+        // wait below is ~0.9 s past the marker's time: a slow machine makes this test fail,
+        // never falsely pass.
+        let launch = try FakeUCIEngine.makeLaunch(.init(infoDelayMs: 1500))
+        addTeardownBlock { launch.cleanUp() }
+        let engine = StockfishEngine(engineURL: launch.executable, arguments: launch.arguments, timeoutSeconds: 5.0)
+
+        let box = OneShotOutcomeBox()
+        let fen = Self.startFEN
+        // Nothing awaits `task.value`: cancellation does not interrupt that await, so a
+        // regression would hang the suite instead of failing it (the `OutcomeBox` pattern
+        // from `EngineSerializationTests`).
+        let task = Task {
+            do {
+                let lines = try await engine.analyze(
+                    fen: fen,
+                    options: EngineOptions(multiPV: 1, movetimeMs: nil, depth: 1),
+                    requireFullDepth: false
+                )
+                box.finish(.success(lines))
+            } catch {
+                box.finish(.failure(error))
+            }
+        }
+
+        await waitForLog(launch, toContain: "go")
+        try await Task.sleep(nanoseconds: 100_000_000)          // 100 ms into the search
+        task.cancel()
+        let cancelledAt = Date()
+
+        var outcome: Result<[EngineLine], any Error>?
+        while Date().timeIntervalSince(cancelledAt) < 0.5 {
+            if let stored = box.outcome {
+                outcome = stored
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        switch outcome {
+        case .none:
+            XCTFail("the cancelled search did not finish within 500 ms")
+        case .some(.success(let lines)):
+            XCTFail("expected CancellationError, got \(lines.count) lines")
+        case .some(.failure(let error)):
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
+        }
+
+        // The child was terminated, not merely abandoned: at 2.6 s past the `go` the fake
+        // would have logged its marker at ~1.6 s had it still had a parent.
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        XCTAssertFalse(
+            launch.commandLog().contains("<bestmove"),
+            "a cancelled one-shot search must not run to its `bestmove`: \(launch.commandLog())"
+        )
+    }
+
+    // MARK: - Helpers
+
+    /// Polls the fake's command log until it contains `token` (as a whole line or as the
+    /// first word of one), or fails the test at `deadline`.
+    @discardableResult
+    private func waitForLog(
+        _ launch: FakeUCIEngine.Launch,
+        toContain token: String,
+        deadline seconds: TimeInterval = 3.0,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async -> [String] {
+        let deadline = Date().addingTimeInterval(seconds)
+        var log: [String] = []
+        while Date() < deadline {
+            log = launch.commandLog()
+            if log.contains(where: { $0 == token || $0.hasPrefix(token + " ") }) { return log }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTFail("the fake never received `\(token)` within \(seconds)s (log: \(log))", file: file, line: line)
+        return log
+    }
+}
+
+/// Carries a one-shot `analyze` outcome out of the task that ran it, so the test can wait
+/// for it with a deadline instead of awaiting `Task.value` — which cancellation does not
+/// interrupt, and which would therefore hang rather than fail.
+private final class OneShotOutcomeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<[EngineLine], any Error>?
+
+    var outcome: Result<[EngineLine], any Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
+    func finish(_ result: Result<[EngineLine], any Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        stored = result
+    }
 }

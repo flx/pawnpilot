@@ -18,6 +18,19 @@ import Foundation
 /// appended to `<script>.log`, and the subshell appends the marker `<bestmove`
 /// there right before it prints `bestmove`, so a test can assert on the order
 /// of `go` and `bestmove` across concurrent callers (`commandLog()`).
+///
+/// The subshell checks the parent's liveness twice: once inside the info loop
+/// and once after it, right before the marker. Which of the two matters depends
+/// on HOW the parent was killed (measured 2026-09-01):
+/// - `Process.terminate()` signals the child's whole PROCESS GROUP — Foundation
+///   spawns the child as a group leader — so the search subshell dies with the
+///   `/bin/sh` that started it. For `StockfishEngine` (which terminates on
+///   cancel and on timeout) the marker is therefore never written at all, and
+///   "no `<bestmove` in the log" is an immediate consequence of the kill.
+/// - `PersistentStockfishEngine.killChild` sends SIGKILL to the pid ONLY, so
+///   there the subshell is orphaned and keeps searching. That is the case the
+///   post-loop check exists for: without it a killed persistent child's search
+///   would still log `<bestmove` and defeat the oracle.
 enum FakeUCIEngine {
     struct Script {
         var depth = 3                    // info lines emitted per `go` without an explicit depth
@@ -138,6 +151,7 @@ enum FakeUCIEngine {
                   if [ \(script.infoDelayMs) -gt 0 ]; then sleep \(delaySeconds); fi
                   d=$((d+1))
                 done
+                if ! kill -0 "$MAIN" 2>/dev/null; then exit 0; fi
                 printf '%s\\n' "<bestmove" >> "$LOG"
                 echo "bestmove \(script.bestmove) ponder e7e5"
                 if [ \(script.extraLineAfterBestmove ? 1 : 0) -eq 1 ]; then echo "info depth 99 multipv 2 score cp 999 nodes 1 nps 1 pv a2a3"; fi
