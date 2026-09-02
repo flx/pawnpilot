@@ -1665,8 +1665,21 @@ private struct AppKitTabView<Selection: Hashable>: NSViewRepresentable {
     let borderType: NSTabView.TabViewBorderType
     let tabType: NSTabView.TabType
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+    func makeCoordinator() -> TabSelectionCoordinator {
+        // The coordinator is deliberately NOT a nested (generic) class: the Swift 6.3.3
+        // optimiser (Xcode 26.6) crashes in the performance inliner
+        // (`isCallerAndCalleeLayoutConstraintsCompatible`) on the synthesised `deinit` of a
+        // generic `NSViewRepresentable` coordinator — Release builds and archives failed
+        // (swiftlang/swift#90150, #89851, #88173); Debug never runs that pass. Behaviour is
+        // unchanged: the old coordinator copied `self` once here and only ever wrote
+        // `selection` through this same binding.
+        let selection = $selection
+        return TabSelectionCoordinator { tabViewItem in
+            guard let tag = tabViewItem?.identifier as? Selection else { return }
+            if selection.wrappedValue != tag {
+                selection.wrappedValue = tag
+            }
+        }
     }
 
     func makeNSView(context: Context) -> NSTabView {
@@ -1733,19 +1746,18 @@ private struct AppKitTabView<Selection: Hashable>: NSViewRepresentable {
         return hosting
     }
 
-    final class Coordinator: NSObject, NSTabViewDelegate {
-        private var parent: AppKitTabView
+}
 
-        init(_ parent: AppKitTabView) {
-            self.parent = parent
-        }
+/// `AppKitTabView`'s delegate. Non-generic on purpose — see `AppKitTabView.makeCoordinator`.
+private final class TabSelectionCoordinator: NSObject, NSTabViewDelegate {
+    private let didSelect: (NSTabViewItem?) -> Void
 
-        func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
-            guard let tag = tabViewItem?.identifier as? Selection else { return }
-            if parent.selection != tag {
-                parent.selection = tag
-            }
-        }
+    init(didSelect: @escaping (NSTabViewItem?) -> Void) {
+        self.didSelect = didSelect
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        didSelect(tabViewItem)
     }
 }
 
