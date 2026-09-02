@@ -454,3 +454,13 @@ status matched with `if case`.
   result as cancelled; (d) `BoardQuadrilateral` already carried
   `@unchecked Sendable` at HEAD. Committed as commit B; both adv reviewers
   on its frozen diff run in parallel with Tier 3.
+- 2026-09-02 · Tier 3 gated (gate 27: 106/106 green, +4 tests, zero
+  app-target warnings). E6 liveness: a 100 ms main-actor sleep completed in
+  ~105 ms during the F-big scan (scratch measurement; the test's bound is
+  400 ms). E8 landing time for F-real + the 1 s probe ≈ 1.3 s against the
+  2.5 s budget (the test fails above it). Premise corrections from the
+  implementer: `invalidateAnalysis` clears `treeExpandedPaths`/`treeRootState`/
+  `treeSelectionSnapshot` unconditionally at HEAD (only `cancelBotMove` and
+  the epoch bump are gated by `replacingBoard`), and `snapAnimation()`
+  already preceded the epoch bump in the completion — the cancels were
+  inserted after it. Committed as commit C.

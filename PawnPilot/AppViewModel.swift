@@ -85,7 +85,7 @@ final class AppViewModel: ObservableObject {
     @Published var canUndo = false
     @Published var canRedo = false
 
-    private let pipeline = DetectorPipeline()
+    private let pipeline: DetectorPipeline
     private let engine: any EngineAnalyzing
     private let treeEngine: any EngineAnalyzing
     private let selector = EngineMoveSelector()
@@ -145,16 +145,23 @@ final class AppViewModel: ObservableObject {
         let engineURL = Self.findEngineURL(in: bundle)
         self.engine = StockfishEngine(engineURL: engineURL)
         self.treeEngine = PersistentStockfishEngine(engineURL: engineURL)
+        self.pipeline = DetectorPipeline()
         if engineURL == nil {
             Self.reportMissingEngine(in: bundle)
         }
     }
 
     /// Injection seam for tests: the same view model over engines the test controls
-    /// (`FakeUCIEngine` through the real engine classes). Production uses `init()`.
-    init(engine: any EngineAnalyzing, treeEngine: any EngineAnalyzing) {
+    /// (`FakeUCIEngine` through the real engine classes) and, optionally, a detector pipeline
+    /// built over a probe classifier. Production uses `init()`.
+    init(
+        engine: any EngineAnalyzing,
+        treeEngine: any EngineAnalyzing,
+        pipeline: DetectorPipeline = DetectorPipeline()
+    ) {
         self.engine = engine
         self.treeEngine = treeEngine
+        self.pipeline = pipeline
     }
 
     // MARK: - The display clock
@@ -229,6 +236,10 @@ final class AppViewModel: ObservableObject {
         // Assigned AFTER `invalidateAnalysis()` above, which cancels the PREVIOUS detection.
         detectionTask = Task {
             let output = await pipeline.process(cgImage: cgImage)
+            // This guard is also the whole cancellation test. `invalidateAnalysis` is the only
+            // place that cancels `detectionTask`, and it bumps `detectionToken` in the same
+            // synchronous block, so a run that returns `DetectorPipeline.cancelledOutput`
+            // ALWAYS returns here: its empty board can never be published as a detection.
             guard token == self.detectionToken else { return }
             var state = BoardState(fromDetection: output)
             if output.suggestedFlipForFEN {
@@ -237,6 +248,19 @@ final class AppViewModel: ObservableObject {
             // The board is being replaced: end any flight first, so a move started during the
             // detection cannot land on the detected position.
             self.snapAnimation()
+            // AFTER the snap (so the tails these cancel have nothing left to clean up): this
+            // detection LANDS, so it beats every piece of engine work started while it ran —
+            // the analysis, both tree expansions, a replay and the previous move's tail
+            // (`cancelSupersededWork`), and the bot's search or its landing (`cancelBotMove`).
+            // All of it was computed for the board this write is about to replace, and
+            // `engineMove` leaves a running detection alone for exactly this reason.
+            self.cancelSupersededWork()
+            self.cancelBotMove()
+            // The remainder of `invalidateAnalysis(replacingBoard: true)`'s board-replacing
+            // cleanup, minus the detection parts — this IS the detection.
+            self.treeExpandedPaths.removeAll()
+            self.treeRootState = nil
+            self.treeSelectionSnapshot = nil
             self.boardEpoch += 1
             self.boardState = state
             // Orient the UI to match the screenshot (white at top when flip is suggested).
@@ -506,7 +530,10 @@ final class AppViewModel: ObservableObject {
             legalDestinations = []
             return
         }
-        invalidateAnalysis(replacingBoard: false)
+        // `supersedesDetection: false`: a bot move started while a detection runs must not
+        // kill it. The detection lands on the board this search is about to read, so IT beats
+        // the bot (its completion calls `cancelBotMove`), not the other way round.
+        invalidateAnalysis(replacingBoard: false, supersedesDetection: false)
         interactionMode = .playAgainstComputer
         engineLines = []
         selectedEngineLineID = nil
@@ -1022,7 +1049,12 @@ final class AppViewModel: ObservableObject {
     /// - Parameter replacingBoard: false for the two callers that are about to MOVE rather than
     ///   replace the board (`applyUserMove`, `engineMove`); a move must not read as a
     ///   replacement to a flight it cuts short, and must not cancel the bot's landing tail.
-    private func invalidateAnalysis(replacingBoard: Bool = true) {
+    /// - Parameter supersedesDetection: false for `engineMove`, the ONE caller whose work a
+    ///   landing detection is allowed to beat: a bot move asked for while the board is being
+    ///   detected must not kill that detection — the detection's completion cancels the bot
+    ///   instead. Every other caller replaces the board the detection was computed for (or
+    ///   moves on it), so the detection is stale the moment it runs.
+    private func invalidateAnalysis(replacingBoard: Bool = true, supersedesDetection: Bool = true) {
         // FIRST, so `cancelSupersededWork`'s documented precondition actually holds: the flight
         // is already over when the tails it cancels are cancelled, and there is nothing left for
         // them to clean up. Also bumps `treeAnimationToken`, so a replay in flight stops at its
@@ -1030,15 +1062,22 @@ final class AppViewModel: ObservableObject {
         snapAnimation()
         cancelSupersededWork()
         if replacingBoard { cancelBotMove() }
-        detectionToken = UUID()
-        // Bumping detectionToken already abandons an in-flight detection (its completion guard
-        // fails); cancelling the task stops it from running on past the board it was for.
-        detectionTask?.cancel()
-        detectionTask = nil
+        if supersedesDetection {
+            detectionToken = UUID()
+            // Bumping detectionToken already abandons an in-flight detection (its completion
+            // guard fails); cancelling the task stops it from running on past the board it was
+            // for. These two lines are the ONLY place `detectionTask` is cancelled, and they
+            // are one synchronous block — which is what lets the completion treat its token
+            // guard as the whole cancellation test.
+            detectionTask?.cancel()
+            detectionTask = nil
+            // Don't leave the status stuck on "Detecting…"; a new detect() re-sets it to
+            // .running. `statusMessage` is deliberately NOT touched: nil-ing it would paint
+            // "Ready." where the bar reads "Detecting board..." today.
+            if case .running = detectionStatus { detectionStatus = .idle }
+        }
         // Every caller of this replaces (or is about to replace) the board — except a move.
         if replacingBoard { boardEpoch += 1 }
-        // Don't leave the status stuck on "Detecting…"; a new detect() re-sets it to .running.
-        if case .running = detectionStatus { detectionStatus = .idle }
         treeExpandedPaths.removeAll()
         treeRootState = nil
         treeSelectionSnapshot = nil
