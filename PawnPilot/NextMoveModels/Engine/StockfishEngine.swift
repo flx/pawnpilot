@@ -3,6 +3,7 @@ import Foundation
 public enum StockfishError: Error, LocalizedError {
     case notFound
     case startFailed
+    case engineGone
     case timeout
 
     public var errorDescription: String? {
@@ -11,6 +12,8 @@ public enum StockfishError: Error, LocalizedError {
             return String(localized: "Stockfish engine not found in app bundle.")
         case .startFailed:
             return String(localized: "Stockfish failed to launch.")
+        case .engineGone:
+            return String(localized: "Stockfish engine exited unexpectedly.")
         case .timeout:
             return String(localized: "Engine timed out while searching.")
         }
@@ -19,15 +22,22 @@ public enum StockfishError: Error, LocalizedError {
 
 public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
     private let engineURL: URL?
+    private let arguments: [String]
     private let timeoutSeconds: Double?
 
-    public init(engineURL: URL?, timeoutSeconds: Double? = 300.0) {
+    /// - Parameter arguments: passed to the child verbatim. Empty for Stockfish; the tests
+    ///   use it to run a scripted fake through `/bin/sh` (the sandboxed test host cannot
+    ///   exec a script file written into its own container).
+    public init(engineURL: URL?, arguments: [String] = [], timeoutSeconds: Double? = 300.0) {
         self.engineURL = engineURL
+        self.arguments = arguments
         self.timeoutSeconds = timeoutSeconds
     }
 
     /// Run a single search and return parsed multi-PV lines.
     public func analyze(fen: String, options: EngineOptions, requireFullDepth: Bool = true) async throws -> [EngineLine] {
+        // A caller cancelled before it got here must not spawn a child at all.
+        try Task.checkCancellation()
         guard let engineURL else { throw StockfishError.notFound }
 
         return try await runEngine(
@@ -51,9 +61,12 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
         let stdoutPipe = Pipe()
 
         process.executableURL = url
+        process.arguments = arguments
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stdoutPipe
+
+        let writer = EngineStdinWriter(handle: stdinPipe.fileHandleForWriting)
 
         do {
             try process.run()
@@ -64,17 +77,15 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
         stdinPipe.fileHandleForReading.closeFile()
         stdoutPipe.fileHandleForWriting.closeFile()
 
-        let writer = stdinPipe.fileHandleForWriting
         func send(_ command: String) {
-            if let data = (command + "\n").data(using: .utf8) {
-                writer.write(data)
-            }
+            writer.send(command)
         }
 
         var latestLines: [Int: EngineLine] = [:]
         var gotUciOK = false
         var readySent = false
         var stopSent = false
+        var sawBestmove = false
         let targetDepth = options.depth
 
         func hasAllLinesAtDepth() -> Bool {
@@ -88,63 +99,115 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
         }
 
         let reader = stdoutPipe.fileHandleForReading
+        // `onCancel` runs on whatever thread cancels this task, so it needs a Sendable handle
+        // on the child; `Process` is not Sendable, `FileHandle` is.
+        let box = ProcessBox(process: process)
         defer {
-            send("quit")
-            writer.closeFile()
-            reader.readabilityHandler = nil
-            process.terminate()
+            writer.send("quit")
+            writer.close()
+            if process.isRunning {
+                process.terminate()
+            }
+            // Idempotent: `onCancel` may have closed it already, and a `FileHandle` never
+            // closes its descriptor twice.
+            try? reader.close()
         }
 
         let timeoutBox = TimeoutBox()
         let timeoutTask: Task<Void, Never>? = {
             guard let timeoutSeconds else { return nil }
             return Task { [timeoutSeconds] in
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                } catch {
+                    return
+                }
                 await timeoutBox.fire()
-                process.terminate()
+                if process.isRunning {
+                    process.terminate()
+                }
             }
         }()
         defer { timeoutTask?.cancel() }
 
         send("uci")
 
-        for try await line in reader.bytes.lines {
-            if await timeoutBox.isFired() {
-                throw StockfishError.timeout
-            }
+        do {
+            try await withTaskCancellationHandler {
+                for try await line in reader.bytes.lines {
+                    if await timeoutBox.isFired() {
+                        throw StockfishError.timeout
+                    }
 
-            if line == "uciok" {
-                gotUciOK = true
-                apply(options: options, send: send)
-                send("isready")
-            } else if line == "readyok" && gotUciOK && !readySent {
-                readySent = true
-                send("position fen \(fen)")
-                if let depth = options.depth {
-                    send("go depth \(depth)")
-                } else if let moveTime = options.movetimeMs {
-                    send("go movetime \(moveTime)")
-                } else {
-                    send("go depth 12")
+                    if line == "uciok" {
+                        gotUciOK = true
+                        apply(options: options, send: send)
+                        send("isready")
+                    } else if line == "readyok" && gotUciOK && !readySent {
+                        readySent = true
+                        send("position fen \(fen)")
+                        if let depth = options.depth {
+                            send("go depth \(depth)")
+                        } else if let moveTime = options.movetimeMs {
+                            send("go movetime \(moveTime)")
+                        } else {
+                            send("go depth 12")
+                        }
+                    } else if line.hasPrefix("info ") {
+                        if let info = parseInfo(line: line) {
+                            latestLines[info.multipv] = info
+                        }
+                        if requireFullDepth, targetDepth != nil, !stopSent, hasAllLinesAtDepth() {
+                            send("stop")
+                            stopSent = true
+                        }
+                    } else if line.hasPrefix("bestmove ") {
+                        // `bestmove` means the current search is finished; accept best available lines.
+                        // In strict-depth mode this prevents waiting forever when fewer legal moves than
+                        // requested MultiPV are available.
+                        sawBestmove = true
+                        break
+                    }
                 }
-            } else if line.hasPrefix("info ") {
-                if let info = parseInfo(line: line) {
-                    latestLines[info.multipv] = info
+            } onCancel: {
+                // Terminating the child ends the search; closing the read end ends a blocked
+                // `bytes.lines` promptly even while a grandchild still holds the write end.
+                if box.process.isRunning {
+                    box.process.terminate()
                 }
-                if requireFullDepth, targetDepth != nil, !stopSent, hasAllLinesAtDepth() {
-                    send("stop")
-                    stopSent = true
-                }
-            } else if line.hasPrefix("bestmove ") {
-                // `bestmove` means the current search is finished; accept best available lines.
-                // In strict-depth mode this prevents waiting forever when fewer legal moves than
-                // requested MultiPV are available.
-                break
+                try? reader.close()
             }
+        } catch {
+            // Closing the read end normally ENDS the loop rather than throwing, but two throws
+            // are still just "the loop is over": `bytes.lines` throwing `CancellationError` at
+            // its own checkpoint, and a read error on the descriptor `onCancel` closed under a
+            // blocked read. The ladder below decides what this call throws — for a cancelled
+            // task that is `CancellationError`, never a descriptor error. Anything else (the
+            // `.timeout` thrown inside the loop, a genuine read failure) propagates as before.
+            guard error is CancellationError || Task.isCancelled else { throw error }
+        }
+
+        if !sawBestmove || Task.isCancelled {
+            // Either the loop ended on EOF, on a cancel or on a close — never on `bestmove`, so
+            // this child will never speak again — or the task was cancelled, in which case
+            // `onCancel` has terminated the child even if a `bestmove` did arrive first. Both
+            // ways nothing may write to its stdin any more, `defer`'s "quit" included
+            // (CLAUDE.md § Standing constraints). Deliberately BEFORE the ladder below.
+            writer.markGone()
         }
 
         if await timeoutBox.isFired() {
             throw StockfishError.timeout
+        }
+        // After the timeout (a timed-out search reports the timeout even when the caller also
+        // went away) and before every "the child is gone" verdict: a cancelled search left the
+        // loop by design, and its child was terminated on purpose.
+        try Task.checkCancellation()
+        if !sawBestmove {
+            if !gotUciOK {
+                throw StockfishError.startFailed
+            }
+            throw StockfishError.engineGone
         }
 
         let lines = latestLines.values.sorted { $0.multipv < $1.multipv }
@@ -211,6 +274,17 @@ public final class StockfishEngine: EngineAnalyzing, @unchecked Sendable {
             nps: nps,
             moves: moves
         )
+    }
+
+    /// Carries the child into `withTaskCancellationHandler`'s `onCancel`, which runs on
+    /// whatever thread cancelled the task. `Process` is not `Sendable`; the handler only reads
+    /// `isRunning` and terminates an already-launched child.
+    private nonisolated final class ProcessBox: @unchecked Sendable {
+        let process: Process
+
+        init(process: Process) {
+            self.process = process
+        }
     }
 
     private actor TimeoutBox {

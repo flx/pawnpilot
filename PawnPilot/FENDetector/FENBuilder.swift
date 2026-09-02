@@ -1,6 +1,6 @@
 import Foundation
 
-public struct FENBuilder {
+nonisolated public struct FENBuilder: Sendable {
     public init() {}
 
     /// Build a FEN string from the current board and metadata.

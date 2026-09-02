@@ -2,8 +2,18 @@ import Foundation
 import CoreGraphics
 
 /// Utility to overwrite noisy borders with the estimated background color.
-struct ImageSanitizer {
+nonisolated struct ImageSanitizer: Sendable {
+    /// The pipeline is this method's only caller and it runs it off the main actor (E9 of
+    /// `(detection-off-main-actor)`). The classifier used to sanitize its crops a second
+    /// time; that call is gone, so the pipeline's is the only one.
+    private static func assertOffMain() {
+        #if DEBUG
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        #endif
+    }
+
     static func sanitize(image: CGImage, marginFraction: Double = 0.05) -> CGImage {
+        Self.assertOffMain()
         let width = image.width
         let height = image.height
         let margin = max(1, Int(Double(min(width, height)) * marginFraction))

@@ -26,6 +26,7 @@
 "Detected %@" = "已识别 %@";
 "Stockfish engine not found in app bundle." = "在应用包中未找到 Stockfish 引擎。";
 "Stockfish failed to launch." = "Stockfish 启动失败。";
+"Stockfish engine exited unexpectedly." = "Stockfish 引擎意外退出。";
 "Engine timed out while searching." = "引擎搜索超时。";
 
 /* Tabs and section titles */

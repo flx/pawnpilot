@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Utility for mapping normalized board coordinates to image space.
-public enum BoardGeometry {
+nonisolated public enum BoardGeometry {
     /// Bilinear interpolation mapping from normalized board coordinates (u,v in 0...1, origin bottom-left)
     /// to image pixel coordinates using the detected quadrilateral.
     public static func mapPoint(u: CGFloat, v: CGFloat, quad: BoardQuadrilateral) -> CGPoint {

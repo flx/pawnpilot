@@ -26,6 +26,7 @@
 "Detected %@" = "Détecté %@";
 "Stockfish engine not found in app bundle." = "Moteur Stockfish introuvable dans le bundle de l’app.";
 "Stockfish failed to launch." = "Stockfish n’a pas pu démarrer.";
+"Stockfish engine exited unexpectedly." = "Le moteur Stockfish s’est arrêté de façon inattendue.";
 "Engine timed out while searching." = "Délai d’attente du moteur dépassé pendant la recherche.";
 
 /* Tabs and section titles */

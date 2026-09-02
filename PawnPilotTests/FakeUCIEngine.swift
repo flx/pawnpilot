@@ -1,0 +1,178 @@
+import Foundation
+
+/// A minimal synchronous UCI stand-in used to drive `StockfishEngine` and
+/// `PersistentStockfishEngine` without the real binary. Each call to
+/// `makeLaunch` writes a fresh `/bin/sh` script to a unique temporary file;
+/// parameters are baked into the script text (not passed via environment
+/// variables) so parallel test classes never interfere with one another.
+///
+/// The script is NOT exec'd directly. The sandboxed test host may spawn
+/// platform binaries such as `/bin/sh` and `/bin/cat`, but exec of a file
+/// written into its own container is refused (observed 2026-09-01: `run()`
+/// surfaced as `startFailed`). So the launch is `/bin/sh <script>`, via the
+/// engines' `arguments:` parameter.
+///
+/// The search runs in a background subshell so the main loop keeps reading
+/// stdin while a search is in flight — that is what makes `stop` and a
+/// mid-search `isready` observable at all. Every line the child receives is
+/// appended to `<script>.log`, and the subshell appends the marker `<bestmove`
+/// there right before it prints `bestmove`, so a test can assert on the order
+/// of `go` and `bestmove` across concurrent callers (`commandLog()`).
+///
+/// The subshell checks the parent's liveness twice: once inside the info loop
+/// and once after it, right before the marker. Which of the two matters depends
+/// on HOW the parent was killed (measured 2026-09-01):
+/// - `Process.terminate()` signals the child's whole PROCESS GROUP — Foundation
+///   spawns the child as a group leader — so the search subshell dies with the
+///   `/bin/sh` that started it. For `StockfishEngine` (which terminates on
+///   cancel and on timeout) the marker is therefore never written at all, and
+///   "no `<bestmove` in the log" is an immediate consequence of the kill.
+/// - `PersistentStockfishEngine.killChild` sends SIGKILL to the pid ONLY, so
+///   there the subshell is orphaned and keeps searching. That is the case the
+///   post-loop check exists for: without it a killed persistent child's search
+///   would still log `<bestmove` and defeat the oracle.
+enum FakeUCIEngine {
+    struct Script {
+        var depth = 3                    // info lines emitted per `go` without an explicit depth
+        var infoDelayMs = 0              // sleep between info lines
+        var uciDelayMs = 0               // sleep before answering `uci` (a deterministic handshake window)
+        var uciDelayOnlyOnce = false     // with uciDelayMs: only the FIRST child delays; later ones answer at once
+        var extraLineAfterBestmove = false
+        var exitOnGo = false             // child exits with status 3 instead of searching
+        var exitOnGoOnlyOnce = false     // with exitOnGo: only the FIRST child dies; later ones search
+        var exitBeforeUCI = false        // child exits immediately (launch-death route)
+        var bestmove = "e2e4"            // the move every `go` answers with (also the PV's first move)
+
+        init(
+            depth: Int = 3,
+            infoDelayMs: Int = 0,
+            uciDelayMs: Int = 0,
+            uciDelayOnlyOnce: Bool = false,
+            extraLineAfterBestmove: Bool = false,
+            exitOnGo: Bool = false,
+            exitOnGoOnlyOnce: Bool = false,
+            exitBeforeUCI: Bool = false,
+            bestmove: String = "e2e4"
+        ) {
+            self.depth = depth
+            self.infoDelayMs = infoDelayMs
+            self.uciDelayMs = uciDelayMs
+            self.uciDelayOnlyOnce = uciDelayOnlyOnce
+            self.extraLineAfterBestmove = extraLineAfterBestmove
+            self.exitOnGo = exitOnGo
+            self.exitOnGoOnlyOnce = exitOnGoOnlyOnce
+            self.exitBeforeUCI = exitBeforeUCI
+            self.bestmove = bestmove
+        }
+    }
+
+    /// What to hand an engine initialiser: `engineURL: launch.executable, arguments: launch.arguments`.
+    struct Launch {
+        let executable: URL
+        let arguments: [String]
+        let scriptURL: URL
+
+        /// Every line the child(ren) of this script received, in order, plus a
+        /// `<bestmove` entry for each `bestmove` printed. Empty while no child has
+        /// read anything yet (the file does not exist until the first line lands).
+        func commandLog() -> [String] {
+            guard let data = FileManager.default.contents(atPath: scriptURL.path + ".log"),
+                  let text = String(data: data, encoding: .utf8) else { return [] }
+            return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        }
+
+        /// Remove the generated script, its marker files and its log. Register with
+        /// `addTeardownBlock { launch.cleanUp() }` so nothing leaks into `$TMPDIR`.
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: scriptURL)
+            try? FileManager.default.removeItem(atPath: scriptURL.path + ".died")
+            try? FileManager.default.removeItem(atPath: scriptURL.path + ".stop")
+            try? FileManager.default.removeItem(atPath: scriptURL.path + ".log")
+        }
+    }
+
+    static let shell = URL(fileURLWithPath: "/bin/sh")
+
+    static func makeLaunch(_ script: Script = Script()) throws -> Launch {
+        let delaySeconds = delayString(forMilliseconds: script.infoDelayMs)
+        let uciDelaySeconds = delayString(forMilliseconds: script.uciDelayMs)
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fake-uci-engine-\(UUID().uuidString).sh")
+        // Marker file for `exitOnGoOnlyOnce` and `uciDelayOnlyOnce` (a script uses at
+        // most one of them): the first child creates it, later children see it.
+        let markerPath = scriptURL.path + ".died"
+        // Touched by `stop`, removed by the next `go`: how the search subshell learns
+        // it should finish now.
+        let stopPath = scriptURL.path + ".stop"
+        let logPath = scriptURL.path + ".log"
+
+        let contents = """
+        #!/bin/sh
+        # Generated by PawnPilotTests/FakeUCIEngine.swift — do not edit by hand.
+        LOG="\(logPath)"
+        STOP="\(stopPath)"
+        MARKER="\(markerPath)"
+        MAIN=$$
+        SEARCH_PID=""
+        if [ \(script.exitBeforeUCI ? 1 : 0) -eq 1 ]; then exit 2; fi
+        while IFS= read -r line; do
+          printf '%s\\n' "$line" >> "$LOG"
+          case "$line" in
+            uci)
+              if [ \(script.uciDelayMs) -gt 0 ]; then
+                if [ \(script.uciDelayOnlyOnce ? 1 : 0) -eq 0 ] || [ ! -f "$MARKER" ]; then
+                  touch "$MARKER"
+                  sleep \(uciDelaySeconds)
+                fi
+              fi
+              echo "id name FakeUCI"; echo "id author PawnPilotTests"; echo "uciok" ;;
+            isready)
+              if [ -n "$SEARCH_PID" ]; then wait "$SEARCH_PID"; SEARCH_PID=""; fi
+              echo "readyok" ;;
+            go*)
+              if [ \(script.exitOnGo ? 1 : 0) -eq 1 ]; then
+                if [ \(script.exitOnGoOnlyOnce ? 1 : 0) -eq 0 ] || [ ! -f "$MARKER" ]; then
+                  touch "$MARKER"
+                  exit 3
+                fi
+              fi
+              if [ -n "$SEARCH_PID" ]; then wait "$SEARCH_PID"; SEARCH_PID=""; fi
+              rm -f "$STOP"
+              case "$line" in
+                *"depth "*) n=${line##*depth }; n=${n%% *} ;;
+                *) n=\(script.depth) ;;
+              esac
+              (
+                d=1
+                while [ "$d" -le "$n" ]; do
+                  echo "info depth $d multipv 1 score cp 10 nodes 100 nps 1000 pv \(script.bestmove) e7e5"
+                  if [ -f "$STOP" ]; then break; fi
+                  if ! kill -0 "$MAIN" 2>/dev/null; then exit 0; fi
+                  if [ \(script.infoDelayMs) -gt 0 ]; then sleep \(delaySeconds); fi
+                  d=$((d+1))
+                done
+                if ! kill -0 "$MAIN" 2>/dev/null; then exit 0; fi
+                printf '%s\\n' "<bestmove" >> "$LOG"
+                echo "bestmove \(script.bestmove) ponder e7e5"
+                if [ \(script.extraLineAfterBestmove ? 1 : 0) -eq 1 ]; then echo "info depth 99 multipv 2 score cp 999 nodes 1 nps 1 pv a2a3"; fi
+              ) &
+              SEARCH_PID=$! ;;
+            stop) touch "$STOP" ;;
+            quit) exit 0 ;;
+            *) ;;
+          esac
+        done
+        exit 0
+
+        """
+
+        try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+        return Launch(executable: shell, arguments: [scriptURL.path], scriptURL: scriptURL)
+    }
+
+    /// The fractional-seconds string `sleep` takes, e.g. "0.05".
+    private static func delayString(forMilliseconds ms: Int) -> String {
+        guard ms > 0 else { return "0" }
+        return String(format: "%g", Double(ms) / 1000.0)
+    }
+}

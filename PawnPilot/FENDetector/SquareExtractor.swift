@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public struct SquareCrop {
+nonisolated public struct SquareCrop: Sendable {
     public let image: CGImage
     public let position: (file: Int, rank: Int)
 }
@@ -11,7 +11,7 @@ public enum SquareExtractionError: Error {
 }
 
 /// Splits a normalized board into 64 square crops.
-public final class SquareExtractor {
+nonisolated public final class SquareExtractor: Sendable {
     private let padFraction: CGFloat
     private let refinedPadFraction: CGFloat
     private let useGridRefinement: Bool
@@ -32,7 +32,16 @@ public final class SquareExtractor {
         self.init(padFraction: padFraction, refinedPadFraction: refinedPadFraction, useGridRefinement: useGridRefinement, loggingEnabled: false)
     }
 
+    /// The pipeline is this method's only caller and it runs it off the main actor (E9 of
+    /// `(detection-off-main-actor)`).
+    private static func assertOffMain() {
+        #if DEBUG
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        #endif
+    }
+
     public func extractSquares(from normalized: NormalizedBoard) throws -> [SquareCrop] {
+        Self.assertOffMain()
         let width = normalized.image.width
         let height = normalized.image.height
         guard width == height else { throw SquareExtractionError.invalidBoardImage }
@@ -113,7 +122,7 @@ public final class SquareExtractor {
 }
 
 /// Evaluates how well grid lines align to the board's color/contrast pattern by sampling all 64 cells.
-private struct GridContrastEvaluator {
+nonisolated private struct GridContrastEvaluator {
     let image: CGImage
 
     func scoreGrid(xLines: [Int], yLines: [Int]) -> Double? {
@@ -213,7 +222,7 @@ private struct GridContrastEvaluator {
     }
 }
 
-private extension Array where Element == Double {
+nonisolated private extension Array where Element == Double {
     var average: Double? {
         guard !isEmpty else { return nil }
         return reduce(0, +) / Double(count)

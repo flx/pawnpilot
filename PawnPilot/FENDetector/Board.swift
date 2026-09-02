@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Chess piece representation compatible with FEN symbols.
-public enum Piece: String, CaseIterable, Codable, Hashable {
+nonisolated public enum Piece: String, CaseIterable, Codable, Hashable, Sendable {
     case whitePawn = "P"
     case whiteKnight = "N"
     case whiteBishop = "B"
@@ -22,7 +22,7 @@ public enum Piece: String, CaseIterable, Codable, Hashable {
 }
 
 /// Board indices follow FEN order: rank 8 (index 7) down to rank 1 (index 0); files a (0) to h (7).
-public struct Board: Codable, Hashable {
+nonisolated public struct Board: Codable, Hashable, Sendable {
     public static let squareCount = 64
     public private(set) var squares: [Piece?]
 

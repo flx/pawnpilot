@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public struct BoardQuadrilateral: Codable, Hashable, @unchecked Sendable {
+nonisolated public struct BoardQuadrilateral: Codable, Hashable, @unchecked Sendable {
     /// Points in image pixel coordinates (origin at bottom-left for CGImage/Vision conversion).
     public let topLeft: CGPoint
     public let topRight: CGPoint
@@ -19,7 +19,7 @@ public struct BoardQuadrilateral: Codable, Hashable, @unchecked Sendable {
     }
 }
 
-public struct BoardDetectionResult {
+nonisolated public struct BoardDetectionResult: Sendable {
     public let quad: BoardQuadrilateral
     public let confidence: Float
 }
@@ -29,10 +29,20 @@ public enum BoardDetectionError: Error {
 }
 
 /// Wraps Vision rectangle detection to find the best chessboard candidate.
-public final class BoardDetector {
+nonisolated public final class BoardDetector: Sendable {
     public init() {}
 
-    public func detectBoard(in cgImage: CGImage) async throws -> BoardDetectionResult {
+    /// The pipeline is this method's only caller and it runs it off the main actor (E9 of
+    /// `(detection-off-main-actor)`): a forgotten `nonisolated` would hop the scan back onto
+    /// main, and this traps in Debug instead of silently freezing the UI again.
+    private static func assertOffMain() {
+        #if DEBUG
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        #endif
+    }
+
+    public func detectBoard(in cgImage: CGImage) throws -> BoardDetectionResult {
+        Self.assertOffMain()
         if let quad = Self.edgeBasedDetect(image: cgImage) {
             return BoardDetectionResult(quad: quad, confidence: 0.2)
         }
@@ -44,6 +54,9 @@ public final class BoardDetector {
 
     /// Edge-based detection: find a checkered band by scanning rows/cols for long alternating runs.
     private static func edgeBasedDetect(image: CGImage) -> BoardQuadrilateral? {
+        // First statement on purpose: the very next line copies the whole image out of its data
+        // provider (59 MB on a 5K capture), which an already-cancelled detection must not pay.
+        if Task.isCancelled { return nil }
         guard let data = image.dataProvider?.data, let ptr = CFDataGetBytePtr(data) else { return nil }
         let bpp = image.bitsPerPixel / 8
         guard bpp >= 3 else { return nil }
@@ -55,10 +68,14 @@ public final class BoardDetector {
             return (Double(ptr[o]) + Double(ptr[o + 1]) + Double(ptr[o + 2])) / (3.0 * 255.0)
         }
 
-        // Scan rows for horizontal checkered pattern.
+        // Scan rows for horizontal checkered pattern. This scan is the expensive phase, so it
+        // is also the one that has to notice a cancelled detection: testing every 64th row
+        // (and every 64th column below) keeps the check off the inner loop while bounding the
+        // work a cancelled detection can still do to a fraction of one scan.
         var startXs: [Int] = []
         var endXs: [Int] = []
         for y in 0..<height {
+            if y % 64 == 0, Task.isCancelled { return nil }
             if let band = bestCheckeredBand(inRow: y, width: width, luminance: luminance) {
                 startXs.append(band.start)
                 endXs.append(band.end)
@@ -69,6 +86,7 @@ public final class BoardDetector {
         var startYs: [Int] = []
         var endYs: [Int] = []
         for x in 0..<width {
+            if x % 64 == 0, Task.isCancelled { return nil }
             if let band = bestCheckeredBand(inColumn: x, height: height, luminance: luminance) {
                 startYs.append(band.start)
                 endYs.append(band.end)
@@ -353,7 +371,7 @@ public final class BoardDetector {
     }
 }
 
-private struct DetectionConfig {
+nonisolated private struct DetectionConfig {
     let minAspect: Float
     let maxAspect: Float
     let minSize: Float

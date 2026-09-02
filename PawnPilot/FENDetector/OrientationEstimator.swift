@@ -1,16 +1,29 @@
 import Foundation
 import CoreGraphics
 
-public enum BoardOrientation {
+nonisolated public enum BoardOrientation: Sendable {
     case standard   // a1 at bottom-left (dark); h1 light at bottom-right
     case rotated180
 }
 
 /// Estimates board orientation from a normalized square board image by sampling corner brightness.
-public struct OrientationEstimator {
+nonisolated public struct OrientationEstimator: Sendable {
     public init() {}
 
+    /// E9: this phase must never run on the main actor (same shape as
+    /// `DetectorPipeline.assertOffMain`).
+    private static func assertOffMain() {
+        #if DEBUG
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        #endif
+    }
+
+    /// A pipeline phase: `DetectorPipeline.process` is its only production caller, so it
+    /// carries the E9 executor precondition. The one test that re-runs it directly
+    /// (`DetectionFixtureTests.assertOrientationIsStandard`) does so from a detached task —
+    /// a `dispatchPrecondition(.notOnQueue(.main))` entered from the main actor traps.
     public func estimateOrientation(normalizedBoard: CGImage) -> (BoardOrientation, DetectionWarning?) {
+        Self.assertOffMain()
         // Sample bottom-left (a1) and bottom-right (h1) squares; if the pattern is inverted, rotate.
         guard let stats = sampleCornerSquares(image: normalizedBoard) else {
             return (.standard, DetectionWarning(message: "Orientation check skipped (sampling failed)."))
@@ -44,7 +57,7 @@ public struct OrientationEstimator {
     }
 }
 
-private extension CGImage {
+nonisolated private extension CGImage {
     /// Compute mean luminance (simple average of RGB) in the given rectangle.
     func meanLuminance(in rect: CGRect) -> Double? {
         guard let cropped = self.cropping(to: rect) else { return nil }
