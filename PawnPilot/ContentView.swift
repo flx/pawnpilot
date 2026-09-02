@@ -208,7 +208,7 @@ struct ContentView: View {
     /// Single source of truth lives in the view model; these bindings project it for the controls.
     private var nextMoveBinding: Binding<PieceColor> {
         Binding(
-            get: { viewModel.boardState.sideToMove },
+            get: { viewModel.displayBoardState.sideToMove },
             set: { viewModel.setSideToMove($0) }
         )
     }
@@ -300,10 +300,10 @@ struct ContentView: View {
         VStack(spacing: 8) {
                 ZStack(alignment: .topLeading) {
                     BoardWithCoords(
-                        boardState: viewModel.boardState,
+                        boardState: viewModel.displayBoardState,
                         orientationWhiteAtBottom: viewModel.orientationWhiteAtBottom,
                         selected: $selectedSquare,
-                        lastMove: viewModel.lastMove,
+                        lastMove: viewModel.displayLastMove,
                         legalTargets: viewModel.legalDestinations,
                         engineLines: displayedEngineLines,
                         selectedEngineLineID: viewModel.selectedEngineLineID,
@@ -318,7 +318,7 @@ struct ContentView: View {
                     ) { from, to in
                         viewModel.applyUserMove(from: from, to: to)
                         selectedSquare = nil
-                        viewModel.updateLegalMoves(for: selectedSquare)
+                        viewModel.updateLegalMoves(for: nil)
                     }
                     if let square = pieceEditorSquare {
                         pieceEditorCard(square: square)
@@ -335,7 +335,7 @@ struct ContentView: View {
                 scoreStrip(
                     lines: displayedEngineLines,
                     bottomColor: viewModel.orientationWhiteAtBottom ? .white : .black,
-                    perspectiveColor: viewModel.boardState.sideToMove,
+                    perspectiveColor: viewModel.displayBoardState.sideToMove,
                     overrideScore: scoreOverrideText
                 )
         }
@@ -789,7 +789,7 @@ struct ContentView: View {
 
     private func beginPieceEdit(at square: BoardSquare) {
         pieceEditorSquare = square
-        pieceEditorCode = viewModel.pieceCode(at: square)
+        pieceEditorCode = viewModel.beginEditing(at: square)
         pieceEditorError = nil
         selectedSquare = nil
         viewModel.updateLegalMoves(for: nil)

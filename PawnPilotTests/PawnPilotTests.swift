@@ -269,6 +269,90 @@ final class PawnPilotTests: XCTestCase {
         XCTAssertEqual(nodes.map(\.uci), ["e2e4", "d2d4"], "Duplicates removed and capped at branchCount")
     }
 
+    // MARK: - MoveTreeLogic.frames (apply-move-then-animate)
+
+    /// Nodes along a single spine: `[0]`, `[0, 0]`, `[0, 0, 0]`.
+    private func spineNodes(_ ucis: [String]) -> [TreeMoveNode] {
+        var path: [Int] = []
+        return ucis.map { uci in
+            path.append(0)
+            return TreeMoveNode(
+                parentID: nil,
+                plyIndex: path.count - 1,
+                choicePath: path,
+                uci: uci,
+                score: .cp(0),
+                depth: 8,
+                scorePerspective: path.count.isMultiple(of: 2) ? .black : .white,
+                isUserMove: !path.count.isMultiple(of: 2)
+            )
+        }
+    }
+
+    func testFramesChainStatesAndStartWithoutAHighlight() {
+        let nodes = spineNodes(["e2e4", "e7e5", "g1f3"])
+        let map = MoveTreeLogic.nodeMap(from: nodes)
+        let replay = MoveTreeLogic.frames(forPath: [0, 0, 0], rootState: BoardState(), nodeMap: map)
+
+        XCTAssertEqual(replay.frames.count, 3)
+        XCTAssertEqual(replay.frames[0].stateBefore, BoardState())
+        XCTAssertNil(replay.frames[0].lastMoveBefore, "frame 0 starts from the root, so it has no highlight")
+        XCTAssertEqual(replay.frames[0].piece, .whitePawn)
+
+        for index in 1..<replay.frames.count {
+            var expected = replay.frames[index - 1].stateBefore
+            expected.apply(move: replay.frames[index - 1].move)
+            XCTAssertEqual(replay.frames[index].stateBefore, expected, "frame \(index) must start where frame \(index - 1) ended")
+            XCTAssertEqual(replay.frames[index].lastMoveBefore, replay.frames[index - 1].move)
+        }
+
+        var expectedFinal = replay.frames[2].stateBefore
+        expectedFinal.apply(move: replay.frames[2].move)
+        XCTAssertEqual(replay.finalState, expectedFinal)
+        XCTAssertEqual(replay.finalLastMove, replay.frames[2].move)
+        XCTAssertEqual(
+            replay.finalState,
+            MoveTreeLogic.state(forPath: [0, 0, 0], rootState: BoardState(), nodeMap: map)?.state,
+            "the frames must end where the plain replay ends"
+        )
+    }
+
+    func testFramesStopAtAMissingNodeAndReturnThePrefix() {
+        let nodes = spineNodes(["e2e4", "e7e5"]) // no node at [0, 0, 0]
+        let map = MoveTreeLogic.nodeMap(from: nodes)
+        let replay = MoveTreeLogic.frames(forPath: [0, 0, 0], rootState: BoardState(), nodeMap: map)
+
+        XCTAssertEqual(replay.frames.count, 2, "the walk stops at the first missing node")
+        XCTAssertEqual(
+            replay.finalState,
+            MoveTreeLogic.state(forPath: [0, 0], rootState: BoardState(), nodeMap: map)?.state,
+            "the prefix's state is the two-ply state"
+        )
+        var expected = BoardState()
+        expected.apply(move: expected.move(fromUCI: "e2e4")!)
+        XCTAssertEqual(replay.finalLastMove, expected.move(fromUCI: "e7e5")!, "the prefix's last move is the second ply")
+    }
+
+    func testFramesStopAtAnUnplayableMove() {
+        let unparseable = MoveTreeLogic.nodeMap(from: spineNodes(["e2e4", "zz99"]))
+        let stopped = MoveTreeLogic.frames(forPath: [0, 0], rootState: BoardState(), nodeMap: unparseable)
+        XCTAssertEqual(stopped.frames.count, 1, "an unparseable UCI truncates the replay")
+
+        // a3 is empty at the start, so the move has no piece to fly: the walk stops before it.
+        let emptyFrom = MoveTreeLogic.nodeMap(from: spineNodes(["a3a4"]))
+        let none = MoveTreeLogic.frames(forPath: [0], rootState: BoardState(), nodeMap: emptyFrom)
+        XCTAssertTrue(none.frames.isEmpty)
+        XCTAssertEqual(none.finalState, BoardState(), "nothing was applied")
+        XCTAssertNil(none.finalLastMove)
+    }
+
+    func testFramesForAnEmptyPathYieldTheRoot() {
+        let replay = MoveTreeLogic.frames(forPath: [], rootState: BoardState(), nodeMap: [:])
+        XCTAssertTrue(replay.frames.isEmpty)
+        XCTAssertEqual(replay.finalState, BoardState())
+        XCTAssertNil(replay.finalLastMove)
+    }
+
     // MARK: - PieceColor (#8)
 
     func testPieceColorFromFENField() {

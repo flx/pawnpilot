@@ -28,6 +28,7 @@ enum FakeUCIEngine {
         var exitOnGo = false             // child exits with status 3 instead of searching
         var exitOnGoOnlyOnce = false     // with exitOnGo: only the FIRST child dies; later ones search
         var exitBeforeUCI = false        // child exits immediately (launch-death route)
+        var bestmove = "e2e4"            // the move every `go` answers with (also the PV's first move)
 
         init(
             depth: Int = 3,
@@ -37,7 +38,8 @@ enum FakeUCIEngine {
             extraLineAfterBestmove: Bool = false,
             exitOnGo: Bool = false,
             exitOnGoOnlyOnce: Bool = false,
-            exitBeforeUCI: Bool = false
+            exitBeforeUCI: Bool = false,
+            bestmove: String = "e2e4"
         ) {
             self.depth = depth
             self.infoDelayMs = infoDelayMs
@@ -47,6 +49,7 @@ enum FakeUCIEngine {
             self.exitOnGo = exitOnGo
             self.exitOnGoOnlyOnce = exitOnGoOnlyOnce
             self.exitBeforeUCI = exitBeforeUCI
+            self.bestmove = bestmove
         }
     }
 
@@ -129,14 +132,14 @@ enum FakeUCIEngine {
               (
                 d=1
                 while [ "$d" -le "$n" ]; do
-                  echo "info depth $d multipv 1 score cp 10 nodes 100 nps 1000 pv e2e4 e7e5"
+                  echo "info depth $d multipv 1 score cp 10 nodes 100 nps 1000 pv \(script.bestmove) e7e5"
                   if [ -f "$STOP" ]; then break; fi
                   if ! kill -0 "$MAIN" 2>/dev/null; then exit 0; fi
                   if [ \(script.infoDelayMs) -gt 0 ]; then sleep \(delaySeconds); fi
                   d=$((d+1))
                 done
                 printf '%s\\n' "<bestmove" >> "$LOG"
-                echo "bestmove e2e4 ponder e7e5"
+                echo "bestmove \(script.bestmove) ponder e7e5"
                 if [ \(script.extraLineAfterBestmove ? 1 : 0) -eq 1 ]; then echo "info depth 99 multipv 2 score cp 999 nodes 1 nps 1 pv a2a3"; fi
               ) &
               SEARCH_PID=$! ;;

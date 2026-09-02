@@ -104,6 +104,11 @@ final class AppViewModel: ObservableObject {
     private var treeExpandingPaths: Set<String> = []
     private var treeExpansionTask: Task<Void, Never>?
     private var treeSelectionSnapshot: BoardSnapshot?
+    /// Bumped by every write that REPLACES the board (reset, rotate, edit, undo, redo, detection,
+    /// a tree selection) — never by a move (`applyUserMove` and `engineMove` invalidate with
+    /// `replacingBoard: false`). A move's tail compares it to tell "my flight was cut short" from
+    /// "the board is no longer mine".
+    private var boardEpoch = 0
 
     init() {
         let bundle = AppBundle.main
@@ -120,6 +125,27 @@ final class AppViewModel: ObservableObject {
     init(engine: any EngineAnalyzing, treeEngine: any EngineAnalyzing) {
         self.engine = engine
         self.treeEngine = treeEngine
+    }
+
+    // MARK: - The display clock
+    //
+    // Reads render the display clock; writes snap first (`snapAnimation`) and then act on the
+    // model. While a piece is in flight the model is already past the move, so the board, the
+    // last-move highlight, the arrows, the score label, the score strip's perspective colour and
+    // the side-to-move picker's getter all read these two instead of `boardState`/`lastMove`.
+
+    /// The position the board renders: the in-flight move's pre-move frame, else the model.
+    var displayBoardState: BoardState {
+        animatingPiece?.displayState ?? boardState
+    }
+
+    /// The last-move highlight the board renders. Note this cannot be written as
+    /// `animatingPiece?.displayLastMove ?? lastMove`: optional chaining flattens, so a frame
+    /// whose highlight is legitimately nil (frame 0 of a replay, or the first move of a game)
+    /// would fall through to the model's move and light up squares the user cannot see yet.
+    var displayLastMove: ChessMove? {
+        guard let animatingPiece else { return lastMove }
+        return animatingPiece.displayLastMove
     }
 
     func loadImage(from url: URL) {
@@ -177,6 +203,10 @@ final class AppViewModel: ObservableObject {
             if output.suggestedFlipForFEN {
                 state = state.rotated180()
             }
+            // The board is being replaced: end any flight first, so a move started during the
+            // detection cannot land on the detected position.
+            self.snapAnimation()
+            self.boardEpoch += 1
             self.boardState = state
             // Orient the UI to match the screenshot (white at top when flip is suggested).
             self.orientationWhiteAtBottom = !output.suggestedFlipForFEN
@@ -200,6 +230,7 @@ final class AppViewModel: ObservableObject {
 
     func analyze() {
         if isAnalyzing { return }
+        snapAnimation()
         if let validationMessage = analysisValidationMessage(for: boardState) {
             statusMessage = validationMessage
             engineLines = []
@@ -253,6 +284,7 @@ final class AppViewModel: ObservableObject {
 
     func analyzeMoveTree() {
         if isTreeAnalyzing { return }
+        snapAnimation()
         if let validationMessage = analysisValidationMessage(for: boardState) {
             statusMessage = validationMessage
             engineLines = []
@@ -302,10 +334,13 @@ final class AppViewModel: ObservableObject {
     }
 
     func selectTreeNode(_ id: TreeMoveNode.ID?) {
+        // A selection replaces the board: end any flight first (this also bumps the animation
+        // token, so a replay in flight stops at its next checkpoint).
+        snapAnimation()
         if id == nil {
-            treeAnimationToken = UUID()
             selectedTreeNodeID = nil
             if let snapshot = treeSelectionSnapshot {
+                boardEpoch += 1
                 boardState = snapshot.state
                 lastMove = snapshot.lastMove
                 legalDestinations = []
@@ -322,38 +357,54 @@ final class AppViewModel: ObservableObject {
             treeNodes.first(where: { $0.id == currentID })?.choicePath
         }
         let newPath = node.choicePath
-        let shouldAnimateIncrementally: Bool
-        if let previousPath {
-            shouldAnimateIncrementally = newPath.count == previousPath.count + 1 && pathHasPrefix(newPath, previousPath)
-        } else {
-            shouldAnimateIncrementally = false
-        }
 
         if treeSelectionSnapshot == nil {
             treeSelectionSnapshot = currentSnapshot()
         }
 
         let map = treeNodeMap()
-        let animationToken = UUID()
-        treeAnimationToken = animationToken
-        Task {
-            if shouldAnimateIncrementally, let previousPath {
-                let succeeded = await animateTreeSelectionIncremental(
-                    previousPath: previousPath,
-                    newPath: newPath,
-                    nodeMap: map,
-                    token: animationToken
-                )
-                if succeeded { return }
-            }
-            await animateTreeSelection(path: newPath, rootState: rootState, nodeMap: map, token: animationToken)
+        let replay = MoveTreeLogic.frames(forPath: newPath, rootState: rootState, nodeMap: map)
+
+        // Nothing along the path resolves yet: leave the board where it is and let the expansion
+        // fill the tree in, as the old animator did when no move of the path parsed.
+        if !newPath.isEmpty, replay.frames.isEmpty {
+            selectedTreeNodeID = id
+            Task { await expandTreeForSelection(id: id) }
+            return
         }
+
+        // One step deeper from the selection the board is already showing: replay only that ply.
+        let frames: [MoveTreeLogic.TreeFrame]
+        if let previousPath,
+           newPath.count == previousPath.count + 1,
+           pathHasPrefix(newPath, previousPath),
+           let lastFrame = replay.frames.last,
+           boardState == lastFrame.stateBefore {
+            frames = [lastFrame]
+        } else {
+            frames = replay.frames
+        }
+
+        // The model reaches the selected position in this synchronous step; the replay is the
+        // visual tail, starting at frame 0.
+        boardEpoch += 1
+        boardState = replay.finalState
+        lastMove = replay.finalLastMove
+        legalDestinations = []
         selectedTreeNodeID = id
+        animatingPiece = frames.first.map { AnimatedPiece(frame: $0, kind: .treeReplay) }
+
+        // Unstored on purpose: the token is the ownership. Any snap bumps it and this task
+        // returns at its next checkpoint without touching the board.
+        let token = treeAnimationToken
+        Task { await advanceTreeFrames(frames, token: token) }
         Task { await expandTreeForSelection(id: id) }
     }
 
     func engineMove() {
         if isEngineThinking { return }
+        // A control was used: end any flight before the validation reads below.
+        snapAnimation()
         if let validationMessage = analysisValidationMessage(for: boardState) {
             statusMessage = validationMessage
             engineLines = []
@@ -372,7 +423,7 @@ final class AppViewModel: ObservableObject {
             legalDestinations = []
             return
         }
-        invalidateAnalysis()
+        invalidateAnalysis(replacingBoard: false)
         interactionMode = .playAgainstComputer
         engineLines = []
         selectedEngineLineID = nil
@@ -402,7 +453,11 @@ final class AppViewModel: ObservableObject {
                     self.statusMessage = String(localized: "Engine returned no move.")
                     return
                 }
-                await self.performAnimatedMove(move: move)
+                // A refusal ("Illegal move.") owns the status. The move is on the model from here;
+                // only a board-replacing write (reset, undo, …) takes the status away from it — a
+                // square click that merely cuts the flight short does not.
+                guard let applied = self.applyMoveNow(move) else { return }
+                guard await self.finishAnimation(applied) != .replaced else { return }
                 self.statusMessage = String.localizedStringWithFormat(
                     NSLocalizedString("Engine played %@.", comment: "Status after engine move"),
                     uci
@@ -415,6 +470,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func playSelectedLine() {
+        snapAnimation()
         guard
             let selectedEngineLineID,
             let line = engineLines.first(where: { $0.id == selectedEngineLineID })
@@ -422,47 +478,81 @@ final class AppViewModel: ObservableObject {
 
         interactionMode = .analyzeLines
         let movesToPlay = Array(line.moves.prefix(maxArrowsPerLine))
+        // An `analyze()` started mid-replay is a benign snap (it leaves board and mode alone) but
+        // it owns the lines from then on: the replay must not run on underneath its search.
+        let analysisTokenAtStart = analysisToken
         Task {
             for uci in movesToPlay {
-                guard interactionMode == .analyzeLines else { return }
-                guard let move = boardState.move(fromUCI: uci) else { continue }
-                await performAnimatedMove(move: move)
+                guard interactionMode == .analyzeLines, analysisToken == analysisTokenAtStart else { return }
+                if let move = boardState.move(fromUCI: uci), let applied = applyMoveNow(move) {
+                    // A replaced board belongs to whoever replaced it; a user move made inside the
+                    // window belongs to that move's own tail. Either way stop replaying here.
+                    guard await finishAnimation(applied) != .replaced else { return }
+                    guard boardState.fen == applied.fenAfter else { return }
+                    // An analysis started during this flight owns the lines: do not retire them.
+                    guard analysisToken == analysisTokenAtStart else { return }
+                }
+                // Retire the lines after every PV move, refused or not (before this change an
+                // unparseable UCI skipped the clear; that only ever happened on malformed engine
+                // output).
                 engineLines = []
             }
-            guard interactionMode == .analyzeLines else { return }
+            guard interactionMode == .analyzeLines, analysisToken == analysisTokenAtStart else { return }
             analyze()
         }
     }
 
     func applyUserMove(from: BoardSquare, to: BoardSquare) {
         let move = ChessMove(from: from, to: to)
+        // Refuse before the snap: a click the position rejects must not end the flight.
         guard moveValidator.isLegal(move: move, in: boardState) else {
             statusMessage = String(localized: "Illegal move.")
             return
         }
-        invalidateAnalysis()
+        invalidateAnalysis(replacingBoard: false)
+        guard let applied = applyMoveNow(move) else { return }
+        // Captured after the invalidation: if either changes before the flight ends, an analysis
+        // or a tree started inside the window and its results must not be wiped by this tail.
+        let analysisTokenAtMove = analysisToken
+        let treeTokenAtMove = treeToken
         Task {
-            await performAnimatedMove(move: move)
-            engineLines = []
-            selectedEngineLineID = nil
-            treeNodes = []
-            selectedTreeNodeID = nil
+            let outcome = await finishAnimation(applied)
+            if analysisToken == analysisTokenAtMove {
+                engineLines = []
+                selectedEngineLineID = nil
+            }
+            if treeToken == treeTokenAtMove {
+                treeNodes = []
+                selectedTreeNodeID = nil
+            }
             legalDestinations = []
-            if keepPlaying, interactionMode == .playAgainstComputer, !isEngineThinking {
+            // Chain the reply only while the board still holds the position this move produced:
+            // not after a reset/undo/… (`.replaced`), and not after a further move, whose own tail
+            // chains its own reply. A flight merely cut short by a click still chains.
+            if outcome != .replaced,
+               boardState.fen == applied.fenAfter,
+               keepPlaying, interactionMode == .playAgainstComputer, !isEngineThinking {
                 engineMove()
             }
         }
     }
 
     func updateLegalMoves(for square: BoardSquare?) {
+        // `nil` is the deselect that follows every move — it must not end the flight.
         guard let square else {
             legalDestinations = []
             return
         }
-        legalDestinations = moveGenerator.legalDestinations(from: square, in: boardState)
+        // Selecting a square is the first half of a move, so it snaps; the dots are then
+        // generated from the position the user is looking at.
+        snapAnimation()
+        legalDestinations = moveGenerator.legalDestinations(from: square, in: displayBoardState)
     }
 
     func setSideToMove(_ color: PieceColor) {
+        // Ahead of the guard: the picker shows the display clock, so the comparison has to be
+        // against the position the user sees — which the snap makes the model.
+        snapAnimation()
         guard boardState.sideToMove != color else { return }
         invalidateAnalysis()
         boardState.sideToMove = color
@@ -500,13 +590,19 @@ final class AppViewModel: ObservableObject {
         statusMessage = String(localized: "Position rotated 180°.")
     }
 
-    func pieceCode(at square: BoardSquare) -> String {
+    /// Seeds the piece editor. Snaps first so the code it returns and the `setPiece` that
+    /// follows describe the same square of the same position.
+    func beginEditing(at square: BoardSquare) -> String {
+        snapAnimation()
         guard let piece = boardState.piece(at: square) else { return "" }
         return Self.pieceCode(for: piece)
     }
 
     @discardableResult
     func setPiece(at square: BoardSquare, code rawCode: String) -> String? {
+        // A write: end any flight first (a tree replay's frames especially), so the board the user
+        // sees while this edit lands is the model it edits. The comparison below reads the model.
+        snapAnimation()
         let normalizedCode = rawCode
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -575,21 +671,78 @@ final class AppViewModel: ObservableObject {
         return nil
     }
 
-    // Already @MainActor-isolated, so direct mutation across the await is safe — no MainActor.run hops.
-    private func performAnimatedMove(move: ChessMove) async {
-        guard moveValidator.isLegal(move: move, in: boardState) else {
+    /// Ends any animation NOW so the display equals the model. A move animation's landing side
+    /// effect (the game-over status) still happens, so a mating move that gets snapped is still
+    /// reported as mate. Every write that reads the board or replaces board/tree state calls this
+    /// first, which is what keeps the length of the animation window from being load-bearing.
+    private func snapAnimation() {
+        treeAnimationToken = UUID()
+        guard let current = animatingPiece else { return }
+        animatingPiece = nil
+        if current.kind == .move { _ = updateStatusForGameOver() }
+    }
+
+    /// What `applyMoveNow` hands its caller: enough to tell, after the flight, whether the move is
+    /// still what the board holds.
+    private struct AppliedMove {
+        let animationID: UUID
+        /// The position the move produced.
+        let fenAfter: String
+        /// `boardEpoch` at the apply: a later replacement of the board bumps it.
+        let epoch: Int
+    }
+
+    /// How a move's flight ended. A snap is NOT "the move never happened" — the move is on the
+    /// model from `applyMoveNow` on; only `.replaced` means somebody else owns the board now.
+    private enum FlightOutcome {
+        /// The animation ran to its end.
+        case landed
+        /// A benign write (a square click, an edit, the picker) ended the flight early; the move
+        /// is still on the board.
+        case cutShort
+        /// A board-replacing write (reset, rotate, edit, undo, redo, detection, a tree selection)
+        /// happened since the apply; whoever did it owns the board and the status.
+        case replaced
+    }
+
+    /// Applies an accepted move to the model NOW and starts its animation. Returns nil when the
+    /// move was refused, in which case `statusMessage` is "Illegal move.".
+    // Already @MainActor-isolated, so the caller's tail runs on the same actor — no MainActor.run hops.
+    @discardableResult
+    private func applyMoveNow(_ move: ChessMove) -> AppliedMove? {
+        guard moveValidator.isLegal(move: move, in: boardState),
+              let piece = boardState.piece(at: move.from) else {
             statusMessage = String(localized: "Illegal move.")
-            return
+            return nil
         }
-        guard let piece = boardState.piece(at: move.from) else { return }
-        pushSnapshot()
-        animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
-        try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
+        // Carried, not recomputed: this exact position is what the board renders while the piece
+        // is in flight.
+        let frame = boardState
+        let frameLastMove = lastMove
+        pushSnapshot()                       // pre-move model; updates canUndo/canRedo
         boardState.apply(move: move)
         lastMove = move
+        let id = UUID()
+        animatingPiece = AnimatedPiece(
+            id: id,
+            kind: .move,
+            piece: piece,
+            from: move.from,
+            to: move.to,
+            displayState: frame,
+            displayLastMove: frameLastMove
+        )
+        return AppliedMove(animationID: id, fenAfter: boardState.fen, epoch: boardEpoch)
+    }
+
+    /// Waits out the animation started by `applyMoveNow` and reports how it ended.
+    private func finishAnimation(_ applied: AppliedMove) async -> FlightOutcome {
+        try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
+        if boardEpoch != applied.epoch { return .replaced }
+        guard animatingPiece?.id == applied.animationID else { return .cutShort }
         animatingPiece = nil
-        updateUndoRedoState()
-        _ = updateStatusForGameOver()
+        _ = updateStatusForGameOver()        // same moment as before: the landing
+        return .landed
     }
 
     func undo() {
@@ -672,11 +825,17 @@ final class AppViewModel: ObservableObject {
         canRedo = !redoStack.isEmpty
     }
 
-    private func invalidateAnalysis() {
+    /// - Parameter replacingBoard: false for the two callers that are about to MOVE rather than
+    ///   replace the board (`applyUserMove`, `engineMove`); a move must not read as a
+    ///   replacement to a flight it cuts short.
+    private func invalidateAnalysis(replacingBoard: Bool = true) {
         analysisToken = UUID()
         treeToken = UUID()
         detectionToken = UUID()
-        treeAnimationToken = UUID()
+        // Every caller of this replaces (or is about to replace) the board — except a move.
+        if replacingBoard { boardEpoch += 1 }
+        // Also bumps `treeAnimationToken`, so a replay in flight stops at its next checkpoint.
+        snapAnimation()
         // Bumping detectionToken abandons any in-flight detection (its completion guard now fails),
         // so don't leave the status stuck on "Detecting…". A new detect() re-sets it to .running.
         if case .running = detectionStatus { detectionStatus = .idle }
@@ -691,7 +850,7 @@ final class AppViewModel: ObservableObject {
     }
 
     var gameOverScoreText: String? {
-        gameOverMessage(for: boardState)
+        gameOverMessage(for: displayBoardState)
     }
 
     private func gameOverMessage(for state: BoardState) -> String? {
@@ -894,74 +1053,17 @@ final class AppViewModel: ObservableObject {
         MoveTreeLogic.state(forPath: path, rootState: rootState, nodeMap: nodeMap)
     }
 
-    private func animateTreeSelection(
-        path: [Int],
-        rootState: BoardState,
-        nodeMap: [String: TreeMoveNode],
-        token: UUID
-    ) async {
-        guard token == treeAnimationToken else { return }
-        guard !path.isEmpty else {
-            boardState = rootState
-            lastMove = nil
-            legalDestinations = []
-            animatingPiece = nil
-            return
-        }
-
-        var moves: [ChessMove] = []
-        var state = rootState
-        var currentPath: [Int] = []
-        for index in path {
-            currentPath.append(index)
-            guard
-                let node = nodeMap[pathKey(currentPath)],
-                let move = state.move(fromUCI: node.uci)
-            else {
-                break
-            }
-            moves.append(move)
-            state.apply(move: move)
-        }
-
-        guard !moves.isEmpty else { return }
-
-        boardState = rootState
-        lastMove = nil
-        legalDestinations = []
-        animatingPiece = nil
-
-        for move in moves {
-            guard token == treeAnimationToken else { return }
-            guard let piece = boardState.piece(at: move.from) else { continue }
-            animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
+    /// The visual tail of a tree selection: the model is already at the selected position, so this
+    /// only walks the display frames. `token` is the ownership — a snap bumps it and the loop
+    /// returns before touching `animatingPiece`.
+    private func advanceTreeFrames(_ frames: [MoveTreeLogic.TreeFrame], token: UUID) async {
+        for index in frames.indices {
             try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
-            guard token == treeAnimationToken else { animatingPiece = nil; return }
-            boardState.apply(move: move)
-            lastMove = move
-            animatingPiece = nil
+            guard token == treeAnimationToken else { return }
+            animatingPiece = index + 1 < frames.count
+                ? AnimatedPiece(frame: frames[index + 1], kind: .treeReplay)
+                : nil
         }
-    }
-
-    private func animateTreeSelectionIncremental(
-        previousPath: [Int],
-        newPath: [Int],
-        nodeMap: [String: TreeMoveNode],
-        token: UUID
-    ) async -> Bool {
-        guard token == treeAnimationToken else { return false }
-        guard newPath.count == previousPath.count + 1, pathHasPrefix(newPath, previousPath) else { return false }
-        guard let node = nodeMap[pathKey(newPath)], let move = boardState.move(fromUCI: node.uci) else { return false }
-        guard let piece = boardState.piece(at: move.from) else { return false }
-
-        legalDestinations = []
-        animatingPiece = AnimatedPiece(id: UUID(), piece: piece, from: move.from, to: move.to)
-        try? await Task.sleep(nanoseconds: UInt64(MoveAnimation.duration * 1_000_000_000))
-        guard token == treeAnimationToken else { animatingPiece = nil; return true }
-        boardState.apply(move: move)
-        lastMove = move
-        animatingPiece = nil
-        return true
     }
 
     private func logWarnings(_ warnings: [DetectionWarning]) {
@@ -1078,9 +1180,39 @@ private func pathHasPrefix(_ path: [Int], _ prefix: [Int]) -> Bool { MoveTreeLog
 private func pathKey(_ path: [Int]) -> String { MoveTreeLogic.pathKey(path) }
 private func countUniqueFirstMoves(in lines: [EngineLine]) -> Int { MoveTreeLogic.countUniqueFirstMoves(in: lines) }
 
+/// A piece in flight, carrying the frame the board renders while it flies: the position the
+/// move was made from and the highlight that belonged to it. The model is already past this
+/// frame (`applyMoveNow` applies before it animates), so the display clock lives here.
 struct AnimatedPiece: Identifiable {
+    /// A move animation's landing has one side effect (the game-over status); a tree replay's
+    /// has none. `snapAnimation` needs to tell them apart.
+    enum Kind {
+        case move
+        case treeReplay
+    }
+
     let id: UUID
+    let kind: Kind
     let piece: Piece
     let from: BoardSquare
     let to: BoardSquare
+    /// The position BEFORE this move.
+    let displayState: BoardState
+    /// The last-move highlight to show while this move is in flight.
+    let displayLastMove: ChessMove?
+}
+
+extension AnimatedPiece {
+    /// The in-flight piece for one ply of a tree replay.
+    init(frame: MoveTreeLogic.TreeFrame, kind: Kind) {
+        self.init(
+            id: UUID(),
+            kind: kind,
+            piece: frame.piece,
+            from: frame.move.from,
+            to: frame.move.to,
+            displayState: frame.stateBefore,
+            displayLastMove: frame.lastMoveBefore
+        )
+    }
 }
