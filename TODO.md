@@ -37,58 +37,16 @@ so and name what §1 and §2 nominate — do not promote silently.
 `(settings-persistence)` in §4 (a feature, not stability — filed so it is not
 lost, not so it is built).
 
-**Ordering rule inside §0 (one pair, load-bearing):**
-`(apply-move-then-animate)` lands before `(view-model-task-ownership-and-cancel)`
-— decided 2026-09-01 from the latter's plan review: cancelling a move task
-whose model mutation still happens after the animation sleep makes the stale
-move land sooner, and the cancel item's own acceptance (C5) is unobservable
-until moves apply synchronously. (The original two pairs — SIGPIPE before
-cancel, serialised actor before `(engine-consolidate)` — shipped their first
-halves on 2026-09-01.) Otherwise work top to bottom.
+**Ordering rules inside §0 are all discharged** (2026-09-01: the SIGPIPE
+item before the cancel item; the serialised actor before
+`(engine-consolidate)`; and `(apply-move-then-animate)` before the cancel
+item, which was reordered after the cancel item's plan review showed its
+guarantee needed synchronous moves first). Work top to bottom.
 
 ## 0. Next up — work these first, in this order
 
-*Filled 2026-09-01 from the review. Three items remain, all High. Each has a
+*Filled 2026-09-01 from the review. Two items remain, both High. Each has a
 reproducible failure and a testable acceptance check; none changes the UI.*
-
-- [ ] (apply-move-then-animate) **[hi · High · rules/state]**
-  *Moved ahead of `(view-model-task-ownership-and-cancel)` on 2026-09-01: that
-  item's plan review proved (by probe) that storing and cancelling the move
-  tasks while the model still mutates after the 0.35 s sleep makes a stale
-  move land SOONER, not never — its headline guarantee and its criterion C5
-  need this item first.*
-  The model mutates 0.35 s AFTER a move was validated, against whatever the
-  board has become by then (review F4). Where: `performAnimatedMove`
-  (`AppViewModel.swift:572-586`) validates, sleeps, then `boardState.apply`
-  with no re-check; `BoardState.apply` (`BoardState.swift:89-153`) moves
-  whatever sits on `from`, side-to-move unchecked. Reachable with two clicks
-  inside 350 ms: two white moves both apply (black's turn skipped); `undo`
-  (`:588-602`) during the sleep restores the snapshot and the move lands
-  anyway with its undo entry already popped; a tree click during an
-  in-flight tree animation makes `animateTreeSelectionIncremental`
-  (`:939-958`) apply one move onto an intermediate position (white's `g1f3`
-  before black's `e7e5`), after which every later `move(fromUCI:)`/`apply`
-  compounds the error — easiest trigger: hold Down-arrow in the Variations
-  list (`ContentView.swift:1106-1126` selects per key repeat). Same class:
-  `resetBoard`/`rotatePosition`/`detect` during the sleep replace the board
-  and wipe history, then the pending `apply` lands the stale move on the NEW
-  board (`apply` checks only that SOME piece sits on `from`,
-  `BoardState.swift:90`); and `analyzeMoveTree`/`analyze` (`:265-279`,
-  `:212-230`) capture the tree root / FEN mid-animation without bumping
-  `treeAnimationToken`, so root ≠ displayed board.
-  Direction: change the model synchronously when a move is accepted (apply,
-  push snapshot, `lastMove`); the animation becomes purely visual —
-  `animatingPiece` describes a piece in flight and `BoardGridView` already
-  hides the piece at both ends while animating (`ContentView.swift:1287`), so
-  the piece appears at its destination when `animatingPiece` clears, exactly
-  as today. Tree selection computes its target with
-  `MoveTreeLogic.state(forPath:)` and sets it authoritatively; an interrupted
-  animation snaps to the target. Same 0.35 s, same hidden-square rule.
-  Acceptance: tests — second rapid `applyUserMove` by the same side is
-  rejected with "Illegal move."; `undo` during animation leaves stack and
-  board consistent; the two-click tree sequence ends at exactly
-  `MoveTreeLogic.state(forPath:)`. §5 by-eye: animation indistinguishable
-  from before. `hi`: touches every move path; both adv reviewers.
 
 - [ ] (view-model-task-ownership-and-cancel) **[hi · High · view-model/concurrency]**
   Stale RESULTS are rejected by tokens, stale WORK keeps running, and one
@@ -174,8 +132,11 @@ reproducible failure and a testable acceptance check; none changes the UI.*
   128 MB hash on EVERY `analyze()` and EVERY bot move; `PersistentStockfishEngine`
   exists but serves only the tree; `parseInfo` (~50 lines), the option block
   and the `[safe:]` subscript are duplicated verbatim (review F14). Builds on
-  `(persistent-engine-serialize-searches)`; retire `StockfishEngine`,
-  `TimeoutBox` and `EngineAnalyzing` (never used as a type). Acceptance: bot
+  `(persistent-engine-serialize-searches)`; retire `StockfishEngine` and
+  `TimeoutBox`. `EngineAnalyzing` IS now a used type — `AppViewModel` stores
+  both engines as `any EngineAnalyzing` and has an `init(engine:treeEngine:)`
+  injection seam (`d960674`, 2026-09-01) that the view-model tests build the
+  fakes through; keep the protocol (or its successor) as that seam. Acceptance: bot
   move latency at fixed depth measured before/after; all three modes on one
   process; the §4 fake covers timeout, EOF and `stop`.
 
@@ -394,6 +355,17 @@ work. Each is a few minutes.*
   by-eye pass over move animation, tree arrows, best-line arrows, list
   selection, the piece editor and slider drag smoothness — nothing visible
   changed. This is the manual half of every item's acceptance.
+  For `(apply-move-then-animate)` (`f9e2d0a`, 2026-09-01) specifically: with
+  no interaction, every frame of a user move, an engine move, a "Play
+  Selected Moves" replay and a tree click (incremental and full replay) must
+  look as before — castling rook still home during the king's flight,
+  en-passant victim still visible, arrows and the score strip unchanged
+  until the landing. The three recorded in-window differences, all needing
+  interaction inside 0.35 s: clicking a square / editing / the picker /
+  Analyze ends the flight (the piece appears at its destination) before
+  acting; a board-replacing action (Reset, Undo, …) does the same instead of
+  letting the piece fly onto the new board; the other side's immediate reply
+  is accepted (before: "Illegal move.").
 - [ ] (sitting-sigpipe-timeout) Optional confirmation of F1 on the installed
   app (outside the debugger — under Xcode it shows as a stop, not a crash):
   depth 30, strict depth on, Lines 10, Analyze, wait for the 300 s timeout.
