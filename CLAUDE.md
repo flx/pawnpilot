@@ -97,6 +97,15 @@ xcodebuild -scheme PawnPilot -project PawnPilot.xcodeproj -configuration Debug \
   suite is 94 methods (`c5a31ca`); the engine and view-model tests drive the
   real engine classes over `PawnPilotTests/FakeUCIEngine.swift`.
 
+- **Release builds are not covered by the gate.** Under Xcode 26.6 (Swift
+  6.3.3) the `-O` performance inliner crashes on the synthesised `deinit` of a
+  GENERIC `NSViewRepresentable` coordinator (swiftlang/swift#90150, #89851,
+  #88173; hit here on `AppKitTabView`'s coordinator, 2026-09-02). Keep
+  coordinators non-generic (`TabSelectionCoordinator` is the pattern), and
+  before a release run `xcodebuild archive -configuration Release` once —
+  `-derivedDataPath /private/tmp/pawnpilot-release-dd`, archive under
+  `~/Library/Developer/Xcode/Archives/<date>/` so Organizer lists it.
+
 ## Known pre-existing flakes
 None catalogued yet. If a test fails, re-run it once before investigating, and
 add what you learn here.
