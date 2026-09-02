@@ -165,7 +165,7 @@ final class DetectionFixtureTests: XCTestCase {
         fixture: String,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) throws {
+    ) async throws {
         let orientationWarnings = output.warnings.filter {
             $0.message.contains("rotated 180") || $0.message.contains("Orientation check skipped")
         }
@@ -181,9 +181,12 @@ final class DetectionFixtureTests: XCTestCase {
             file: file,
             line: line
         )
-        let (orientation, _) = OrientationEstimator().estimateOrientation(
-            normalizedBoard: normalized.image
-        )
+        // Off the main actor on purpose: `estimateOrientation` is a pipeline phase and carries
+        // the E9 executor precondition, which traps when entered from the main actor.
+        let image = normalized.image
+        let (orientation, _) = await Task.detached {
+            OrientationEstimator().estimateOrientation(normalizedBoard: image)
+        }.value
         guard case .standard = orientation else {
             XCTFail("\(fixture): orientation is \(orientation), expected .standard",
                     file: file, line: line)
@@ -211,7 +214,7 @@ final class DetectionFixtureTests: XCTestCase {
         )
         assertBoardIsEmpty(output.board, fixture: "F-edge")
         XCTAssertEqual(placement(of: output), "8/8/8/8/8/8/8/8", "F-edge: placement")
-        try assertOrientationIsStandard(output, fixture: "F-edge")
+        try await assertOrientationIsStandard(output, fixture: "F-edge")
         XCTAssertFalse(output.suggestedFlipForFEN, "F-edge: nothing on the board suggests a flip")
         XCTAssertTrue(
             output.lowConfidenceSquares.isEmpty,
@@ -239,7 +242,7 @@ final class DetectionFixtureTests: XCTestCase {
         )
         assertBoardIsEmpty(output.board, fixture: "F-big")
         XCTAssertEqual(placement(of: output), "8/8/8/8/8/8/8/8", "F-big: placement")
-        try assertOrientationIsStandard(output, fixture: "F-big")
+        try await assertOrientationIsStandard(output, fixture: "F-big")
         XCTAssertFalse(output.suggestedFlipForFEN, "F-big: nothing on the board suggests a flip")
         XCTAssertTrue(
             output.lowConfidenceSquares.isEmpty,

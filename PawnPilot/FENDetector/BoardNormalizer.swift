@@ -2,7 +2,7 @@ import Foundation
 import CoreImage
 import CoreGraphics
 
-public struct NormalizedBoard {
+nonisolated public struct NormalizedBoard: Sendable {
     public let image: CGImage
     public let size: CGSize
 }
@@ -11,11 +11,19 @@ public enum BoardNormalizationError: Error {
     case unableToCreateImage
 }
 
-public final class BoardNormalizer {
+nonisolated public final class BoardNormalizer: Sendable {
     private let context: CIContext
 
     public init(context: CIContext = CIContext()) {
         self.context = context
+    }
+
+    /// The pipeline is this method's only caller and it runs it off the main actor (E9 of
+    /// `(detection-off-main-actor)`).
+    private static func assertOffMain() {
+        #if DEBUG
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        #endif
     }
 
     /// Rectify the detected board quadrilateral into a square CGImage of `targetSize`.
@@ -24,6 +32,7 @@ public final class BoardNormalizer {
         quad: BoardQuadrilateral,
         targetSize: CGSize = CGSize(width: 1024, height: 1024)
     ) throws -> NormalizedBoard {
+        Self.assertOffMain()
         let ciImage = CIImage(cgImage: cgImage)
 
         // First, correct perspective into a rectangular patch.

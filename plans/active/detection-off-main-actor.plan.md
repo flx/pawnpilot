@@ -439,3 +439,18 @@ status matched with `if case`.
   own `Piece13.mlmodelc` and shown non-vacuous (+12 px shift, black/white
   squares, a1-light each reject). No pbxproj edit needed (the test folder is
   a synchronized group without exceptions).
+- 2026-09-02 · Tiers 1–2 gated (gate 26: 102/102 green, +4 tests; E11 zero
+  app-target warnings; E2 every Tier 0 pin unchanged incl. the two
+  threshold-brittle ones). After-numbers (per-test durations, Debug): F-big
+  2.0 s (was 3.0), F-edge 0.39 s (0.6), F-real 0.30 s (0.54) — and none of
+  it on the main actor any more (E3). Deviations accepted: (a)
+  `estimateOrientation` keeps its precondition and the Tier 0 test re-runs
+  it from a detached task (the implementer had dropped the precondition
+  because the test called it from main); (b) E5(b) cancels from inside the
+  probe at the first crop — polling from the test task is vacuous because
+  64 blocking children saturate the cooperative pool and the poll cannot
+  resume until they finish; (c) `classify` reports cancellation by
+  returning fewer results than crops, and the pipeline treats a short
+  result as cancelled; (d) `BoardQuadrilateral` already carried
+  `@unchecked Sendable` at HEAD. Committed as commit B; both adv reviewers
+  on its frozen diff run in parallel with Tier 3.

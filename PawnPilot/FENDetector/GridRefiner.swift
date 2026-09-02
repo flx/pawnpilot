@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Attempts to refine board grid lines based on luminance edges.
-struct GridRefiner {
+nonisolated struct GridRefiner: Sendable {
     func refineGrid(in image: CGImage) -> (xLines: [Int], yLines: [Int])? {
         guard let ptr = image.dataProvider?.data.flatMap({ CFDataGetBytePtr($0) }) else { return nil }
         let bpp = image.bitsPerPixel / 8
