@@ -45,34 +45,8 @@ guarantee needed synchronous moves first). Work top to bottom.
 
 ## 0. Next up — work these first, in this order
 
-*Filled 2026-09-01 from the review. One item remains, High. It has a
-reproducible failure and a testable acceptance check; it does not change the UI.*
-
-- [ ] (detection-off-main-actor) **[hi · High · detection/perf]**
-  Board detection runs entirely on the main thread and freezes the UI for the
-  whole run (review F3). Where: pbxproj `SWIFT_DEFAULT_ACTOR_ISOLATION =
-  MainActor` + `SWIFT_APPROACHABLE_CONCURRENCY = YES`; no `nonisolated`,
-  `@concurrent` or `Task.detached` in live code (grep), so
-  `DetectorPipeline.process` (`DetectorPipeline.swift:57`) is main-actor and
-  `AppViewModel.detect`'s `Task {}` (`:166-167`) inherits it;
-  `BoardDetector.detectBoard` is `async` with no `await`
-  (`BoardDetection.swift:35-43`); `PieceClassifier.classify` runs 64 Vision
-  requests serially inside `queue.sync` (`PieceClassifier.swift:64-68`).
-  Direction: mark the FENDetector types `nonisolated`, make their outputs
-  `Sendable` (`BoardQuadrilateral` already is), make `process` **`@concurrent`**
-  — under approachable concurrency a plain `nonisolated async` function still
-  runs on the caller's actor — drop the `DispatchQueue`, classify the 64
-  crops in a `TaskGroup` (Vision handlers are independent; share the one
-  `VNCoreMLModel`), hop to main only to publish. While in the code path: stop
-  sanitising every crop twice (`DetectorPipeline.swift:94-95` AND
-  `PieceClassifier.swift:72` — the pipeline owns it).
-  Acceptance: a test with a probe classifier asserting `Thread.isMainThread ==
-  false` inside `process`; the 64 classifications run concurrently (probe
-  counts overlap); the detected `Board` for a fixture image is identical
-  before and after (add one fixture screenshot under `PawnPilotTests/`); §5:
-  "Detecting board…" and the spinner are visibly painted during detection.
-  Record wall-clock before/after in the plan. `hi`: concurrency boundary
-  change across a whole folder; both adv reviewers.
+*Filled 2026-09-01 from the review. Empty as of 2026-09-02: all five §0
+items shipped (see `DONE.md`). The next `/work` run starts on §1.*
 
 ## 1. Architecture — decided, in this order (after §0)
 
@@ -139,6 +113,12 @@ reproducible failure and a testable acceptance check; it does not change the UI.
   change.
 
 - [ ] (dead-detection-and-recents-purge) **[standard · Medium · memory/dead-code]**
+  Note (2026-09-02, after `(detection-off-main-actor)`): keep `DetectionStatus`
+  itself — `AppViewModelDetectionTests` and the view model match on
+  `.running`/`.idle`/`.succeeded`; drop only its dead cases/payload. The
+  `nonisolated`/`Sendable` annotations on `GridRefiner`, `DetectionConfig` and
+  `luminanceMask*` go with the code. `DetectionOutput.fen` is still read by
+  `DetectionFixtureTests` (placement pin) — move that pin to `board` first.
   Deletion-only. `detectionStatusView` (`ContentView.swift:643-670`) and
   `recentsView` (`:672-708`) are defined and never mounted (grep); so
   `viewModel.recents` — up to three full-resolution `NSImage`s, ~59 MB each
@@ -203,6 +183,12 @@ reproducible failure and a testable acceptance check; it does not change the UI.
 ## 3. Performance — filed, not scheduled
 
 - [ ] (detection-downsample-before-edge-scan) **[standard · Medium · detection/perf]**
+  Since `(detection-off-main-actor)` (2026-09-02) the scan runs off the main
+  actor and tests `Task.isCancelled` every 64 rows/columns, so this is now
+  purely wall-clock: `PawnPilotTests/SyntheticBoard.big2880()` (2880×1800,
+  quad `CGRect(864, 324, 1151, 1151)`, empty board) is the fixture and
+  `DetectionFixtureTests.testFBig_…` the before/after pin — 2.0 s Debug at
+  HEAD. Keep the quad within ±2 px after scaling back.
   `BoardDetector.edgeBasedDetect` (`BoardDetection.swift:46-138`) scans every
   row AND every column of the full-resolution screenshot through a per-pixel
   closure with a `[Run]` allocation each (`:147-172`), and
@@ -337,6 +323,19 @@ work. Each is a few minutes.*
   acting; a board-replacing action (Reset, Undo, …) does the same instead of
   letting the piece fly onto the new board; the other side's immediate reply
   is accepted (before: "Illegal move.").
+- [ ] (sitting-detection-spinner-paints) After `(detection-off-main-actor)`
+  (2026-09-02): drop a full-screen Retina screenshot. "Detecting board…"
+  and the spinner must now PAINT during the detection and the window must
+  stay responsive (F3's freeze is gone); the detected position must be the
+  one the old build produced for the same image. Note the wall-clock next
+  to the F3 baseline you recorded.
+- [ ] (sitting-detection-stale-status-after-cancel) A UI decision, not a
+  bug fix: make a board move (or Reset) WHILE a detection runs. The
+  detection stops, but the bar keeps reading "Detecting board…" until the
+  next status write — exactly as before the item (kept under "UI
+  unchanged"). Decide whether it should read "Ready." or the move's status
+  instead; the one-line change is `statusMessage = nil` where
+  `invalidateAnalysis` moves `detectionStatus` from `.running` to `.idle`.
 - [ ] (sitting-sigpipe-timeout) Optional confirmation of F1 on the installed
   app (outside the debugger — under Xcode it shows as a stop, not a crash):
   depth 30, strict depth on, Lines 10, Analyze, wait for the 300 s timeout.

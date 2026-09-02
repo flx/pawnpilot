@@ -464,3 +464,92 @@ status matched with `if case`.
   the epoch bump are gated by `replacingBoard`), and `snapAnimation()`
   already preceded the epoch bump in the completion — the cancels were
   inserted after it. Committed as commit C.
+- 2026-09-02 · Code review of commit B, adv-review-behavior: "merge after
+  fixing 2" — (1) B alone opens the mid-detection window that only Tier 3
+  governs (a bot move or a user move killed the detection and left the bar
+  on "Detecting board..."): CLOSED by commit C for the bot; the stale
+  string after a user move is the recorded §5 sitting; (2) the fixture
+  tests pinned warning COUNTS, not text — a cancelled output would pass
+  five of eight F-edge assertions: TO FIX (pin `warnings.map(\.message)`);
+  (3) the cancelled-FEN assertion compared the output to itself: TO FIX
+  (literal); (4) cancellation signalled in-band by array length (`!=`):
+  ACCEPTED, recorded — the production conformer only shortens on
+  cancellation and the view model's token guard discards the result;
+  (5) the `VNCoreMLModel` thread-safety claim rests on one probe run and no
+  test can detect a race: ACCEPTED, evidence named in commit B's message;
+  (6) E5b's `< 64` is core-count dependent: TO FIX (skip on ≥ 64 cores);
+  (7) a stale comment says `@MainActor` on the fixture class becomes
+  redundant — it is what drives `process` FROM main and arms E9: TO FIX.
+  Verified by its probes: E3 is caused by `@concurrent` (a plain
+  nonisolated async `process` runs ON main under SE-0461); E9 traps (exit
+  133) on a forgotten `nonisolated`; the removed second sanitise is a
+  byte-exact no-op (0 of 4,194,304 bytes differ).
+- 2026-09-02 · Code review of commit B, adv-review-edge: "merge", 7
+  advisories. TO FIX (cheap): E5a's 100 ms cancel window straddles a
+  Release-speed scan → cancel at 20 ms (inside the scan in both
+  configurations); a bounds guard before `board[file, rank] =` for
+  positions an injected classifier returns (the subscript's precondition
+  traps in -O too); `Task.isCancelled` as the first statement of
+  `edgeBasedDetect`, before the full-image copy (59 MB on a 5K capture);
+  the dead `labels` array; E5b skipped on ≥ 64 cores; the unique-caller
+  invariant of the E9 preconditions recorded in CLAUDE.md § Standing
+  constraints (a wrong call is SIGTRAP, not XCTFail — a test that calls a
+  phase directly must do so off main). RECORDED: the suite runs in 7
+  parallel test-host processes on 10 cores (scheme `parallelizable`), so
+  E4/E5a/E5b's budgets stay as they are; a cancel landing after every child
+  started returns a complete board (correct for production). Verified by
+  its probes: 32 classifications of F-real across 6 concurrent processes
+  bit-identical, nearest confidence to the 0.2 threshold 0.150 (margin
+  0.05); `#if DEBUG` active for the app target; no early release of the
+  `CFData` behind the scan's pointer under MallocScribble; an explicitly
+  `@MainActor` conformer to the seam still runs `classify` off main.
+- 2026-09-02 · Code review of commit C, adv-review-behavior: "merge after
+  fixing 2". TO FIX: (1) E8's "no `<bestmove`" oracle is confounded by the
+  one-shot engine's 5 s timeout (it terminates the fake ~δ before the
+  marker) → `timeoutSeconds: 30` in this file's view model; (2) E8a/E8b
+  assert the status is still "Detected position." after the wait (without
+  the completion's cancel, the superseded search's catch writes "Engine
+  timed out while searching." over it); (3) a bot move that LANDS during a
+  detection is shown, reported, then wiped when the detection lands (the
+  rule "a landing detection beats engine work started during it" applied
+  to the landed case) → recorded as an accepted delta AND pinned by E8c
+  (short fake delay, bot lands first; after the detection: F-real's board,
+  "Detected position.", `canUndo == false`); (5) the completion's tree
+  cleanup had no coverage → E8d (`analyzeMoveTree()` during a detection;
+  after it lands: no tree, no root, flag false); (6)/(7) comments: E6/E7
+  are item-level pins, not commit-C discriminators; "ALWAYS returns here"
+  holds for the real classifier. RECORDED: (4) E10's "only visible change"
+  wording is stale — `isAnalyzing`/`isTreeAnalyzing`/`isEngineThinking`
+  now drop the instant a detection lands instead of when the engine
+  answers (authorised by Tier 3, an improvement); (8) the 5.3 s wait is
+  measured from the poll that saw `go` (≤ 20 ms late). Clean by its
+  trace: the quiet path (no concurrent engine work) is byte-equivalent to
+  before; no "Ready." frame (the completion is one synchronous turn); all
+  nine `invalidateAnalysis` callers correct; per-mutation discrimination
+  of E8a/E8b confirmed.
+- 2026-09-02 · Code review of commit C, adv-review-edge: "merge after
+  fixing 2" — the same two as the behavior review, probe-verified: the
+  one-shot engine's 5 s timeout terminates the fake 26–35 ms before its
+  `<bestmove` (group kill at t_run+5.0 s: marker absent 3/3; at +30 s:
+  present) → `timeoutSeconds: 30`; the 2.5 s landing budget can flake
+  under pool saturation (a main-actor poll measured up to 340 ms late
+  during the fan-out) → 4.0 s. Advisories RECORDED: E6's 0.4 s bound is
+  safe because the fan-out starts ~3 s in (comment added); E7's
+  `callCount == 0` is guaranteed by the pre-classify checkpoint, E5a is
+  the in-scan pin (comment corrected); the "Detecting…" panel it names as
+  newly visible is `detectionStatusView`, which is never mounted;
+  `detectionTask` is not cleared on normal completion (documented
+  convention). Clean by its trace: a detection completion can never
+  cancel a live USER-move tail (a user move supersedes the detection); the
+  completion has no suspension point after its guard; no callee reaches
+  `invalidateAnalysis`; generations cannot cross; nested types in a
+  `@MainActor` test class are not main-actor isolated (probe), so the probe
+  classifier's sleep blocks a pool thread, not main.
+- 2026-09-02 · Shipped. Commits: A `a8baf47` (fixtures + before-pins), B
+  `efa389a` (pipeline off-main), C `35e5a8e` (view model), review fixes
+  `c6b06e9` (B) and `939a3b6` (C). Gates 25–29 green (98 → 108 tests),
+  zero app-target warnings throughout. Final after-numbers (Debug
+  per-test): F-big 2.0 s, F-edge 0.39 s, F-real 0.30 s, none on the main
+  actor; E6's 100 ms main-actor sleep completes in ~105 ms during the scan.
+  Verification owed: §5 `(sitting-detection-spinner-paints)`; the UI
+  decision `(sitting-detection-stale-status-after-cancel)`.
